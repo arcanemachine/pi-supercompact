@@ -3,10 +3,14 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 const SUMMARY_REQUEST_TYPE = "pi-supercompact:summary-request";
 const CONTEXT_MESSAGE_TYPE = "pi-supercompact:context";
-const SUMMARY_PLACEHOLDER = "Super-summary prepared; compacting context.";
+const DECISION_TOOL_NAME = "record_supercompact_decision";
+const LEGACY_SUMMARY_PLACEHOLDER =
+  "Super-summary prepared; compacting context.";
+const MAX_SUMMARY_ATTEMPTS = 3;
 
 export type ContinuationAction = "continue" | "stop";
 
@@ -21,17 +25,42 @@ type RequestPhase =
   | "summary-ready"
   | "compacting";
 
-interface SupercompactRequest extends ParsedSuperSummary {
+interface SupercompactRequest {
   id: string;
   phase: RequestPhase;
-  extraContext: string;
   compactionCompleted: boolean;
-  parseError?: string;
+  attempts: number;
+  correctionSent: boolean;
+  currentBatchValid: boolean;
+  action?: ContinuationAction;
+  summary?: string;
+  error?: string;
 }
 
 interface SummaryRequestDetails {
   requestId?: unknown;
 }
+
+interface RestoredContextDetails {
+  summary?: unknown;
+}
+
+interface DecisionToolDetails {
+  requestId: string;
+  continuation: ContinuationAction;
+}
+
+const DecisionParameters = Type.Object(
+  {
+    continuation: Type.Unsafe<ContinuationAction>({
+      type: "string",
+      enum: ["continue", "stop"],
+      description:
+        "Whether the agent should continue authorized incomplete work after compaction or wait for the user.",
+    }),
+  },
+  { additionalProperties: false },
+);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -43,6 +72,15 @@ function notify(
   level: "info" | "warning" | "error" = "info",
 ): void {
   if (ctx.hasUI) ctx.ui.notify(message, level);
+}
+
+function setWorkingMessage(ctx: ExtensionContext, message?: string): void {
+  if (!ctx.hasUI) return;
+  if (message === undefined) {
+    ctx.ui.setWorkingMessage();
+  } else {
+    ctx.ui.setWorkingMessage(message);
+  }
 }
 
 function textFromAssistant(message: { content: unknown }): string {
@@ -58,37 +96,48 @@ function textFromAssistant(message: { content: unknown }): string {
     .trim();
 }
 
-function hasToolCalls(message: { content: unknown }): boolean {
+interface AssistantToolCall {
+  id: string;
+  name: string;
+}
+
+function toolCallsFromAssistant(message: {
+  content: unknown;
+}): AssistantToolCall[] {
+  if (!Array.isArray(message.content)) return [];
+
+  return message.content.flatMap((part) => {
+    if (
+      !isRecord(part) ||
+      part.type !== "toolCall" ||
+      typeof part.id !== "string" ||
+      typeof part.name !== "string"
+    ) {
+      return [];
+    }
+    return [{ id: part.id, name: part.name }];
+  });
+}
+
+function isDecisionToolCallPart(value: unknown): boolean {
   return (
-    Array.isArray(message.content) &&
-    message.content.some((part) => isRecord(part) && part.type === "toolCall")
+    isRecord(value) &&
+    value.type === "toolCall" &&
+    value.name === DECISION_TOOL_NAME
   );
 }
 
-function stripCodeFence(value: string): string {
-  const match = value.match(/^```(?:xml)?\s*\n([\s\S]*?)\n```$/i);
-  return match ? match[1].trim() : value;
-}
-
-export function parseSuperSummary(
-  value: string,
-): ParsedSuperSummary | undefined {
-  const normalized = stripCodeFence(value.trim());
-  const match = normalized.match(
-    /^<supercompact continuation="(continue|stop)">\s*([\s\S]*?)\s*<\/supercompact>$/,
-  );
-  if (!match || !match[2].trim()) return undefined;
-
+function staticComponent(lines: string[]) {
   return {
-    action: match[1] as ContinuationAction,
-    summary: match[2].trim(),
+    render: () => lines,
+    invalidate: () => {},
   };
 }
 
 export function buildSummaryPrompt(extraContext: string): string {
   const emphasis = extraContext.trim()
     ? [
-        "The user supplied the following extra context. It has highest priority when shaping the summary. Treat it as a continuation instruction only when it explicitly requests further work, continuation, resumption, stopping, or waiting:",
+        "The user supplied the following extra context. It has highest priority when shaping the summary and continuation decision. Treat it as a continuation instruction only when it explicitly requests further work, continuation, resumption, stopping, or waiting:",
         "<extra-context>",
         extraContext.trim(),
         "</extra-context>",
@@ -96,30 +145,35 @@ export function buildSummaryPrompt(extraContext: string): string {
     : "The user supplied no extra context.";
 
   return [
-    "Prepare a practical full-context continuation summary before context compaction.",
-    "Summarize the entire conversation context currently available to you, including relevant earlier summaries and user-provided state.",
-    "Do not call tools, modify files, continue the task, or answer questions from the conversation. Only produce the requested summary.",
+    "Prepare the canonical working-memory handoff for this session before context compaction.",
+    "Use the entire conversation context currently available to you, including relevant earlier summaries and user-provided state.",
+    "Do not modify files, continue the task, answer questions from the conversation, or call any tool except the required continuation-decision tool. Only produce the requested handoff.",
     "",
     emphasis,
     "",
-    "Include useful sections without forcing empty ones:",
-    "- Goal or direction",
-    "- Work completed and current state",
-    "- Key decisions",
-    "- Files, paths, commands, artifacts, or commits",
-    "- Verification performed",
-    "- In-progress work",
-    "- Blockers or risks",
-    "- Upcoming items and where to resume",
-    "- Continuation cautions and user-decided direction",
+    "Prioritize current actionable state over closed history. Include useful sections without forcing empty ones, in roughly this order:",
+    "- Current objective",
+    "- Exact next action",
+    "- User-approved decisions and authorization boundaries",
+    "- Current state",
+    "- Open decisions or blockers",
+    "- Important files for continuation (explicitly non-exhaustive)",
+    "- Verified results",
+    "- Reported or unverified claims",
+    "- Completed work, compressed to outcomes and material rationale",
     "",
+    "Separate durable facts and verified results from mutable observations, unverified claims, and instructions for future work.",
+    "Mutable observations include repository state, installed software, executor availability, external services, and other facts that may change. State when they were observed when useful, and say to revalidate them only when the next action materially depends on them.",
+    "For important files, label fully read, partially read, unread, modified, or read status unknown only when genuinely known. Do not infer completeness. The list must remain focused and explicitly non-exhaustive.",
+    "Pi may separately retain a broader mechanical ledger of paths used by file tools. A path in that ledger does not prove that a read was complete, that exact contents remain in active context, or that the file is unchanged.",
     "Use only known facts. Clearly qualify reported or unverified claims. Prefer compact headings, bullets, and concrete paths. Refer to the user in the third person.",
+    "Do not include commit hashes, blob hashes, forensic provenance identifiers, diary-style narration, or detailed closed history that does not affect continuation.",
     "",
-    'Choose the continuation decision conservatively. When uncertain, choose continuation="stop".',
-    'Choose continuation="continue" only when at least one of these conditions holds:',
+    "Choose the continuation decision conservatively. When uncertain, choose stop.",
+    "Choose continue only when at least one of these conditions holds:",
     "- The user explicitly requests continuing or resuming an identifiable user-authorized task.",
     "- Immediately before this summarization request, the assistant was actively executing a specific user-authorized task, a concrete next action remains, and that action requires no new user input or approval.",
-    'Choose continuation="stop" when any of these conditions holds:',
+    "Choose stop when any of these conditions holds:",
     "- The requested work has been completed, or the assistant has delivered a result, conclusion, or final response.",
     "- The assistant is awaiting clarification, approval, credentials, access, or a user decision.",
     "- Remaining possibilities are merely optional improvements, speculative ideas, backlog items, cleanup, or work that was not explicitly authorized.",
@@ -127,10 +181,8 @@ export function buildSummaryPrompt(extraContext: string): string {
     "Do not invent work, broaden the task, or treat potentially useful follow-up work as authorized.",
     "Only explicit language requesting further work, continuation, resumption, stopping, or waiting overrides these rules. Extra context that merely emphasizes part of the summary does not imply continuation.",
     "",
-    "Reply with exactly this wrapper and no surrounding commentary or code fence:",
-    '<supercompact continuation="continue|stop">',
-    "[Markdown summary]",
-    "</supercompact>",
+    "Write the handoff as ordinary Markdown with no wrapper, code fence, preamble, or trailing commentary.",
+    `In the same response, after writing the Markdown, call ${DECISION_TOOL_NAME} exactly once with continuation set to continue or stop. Do not call any other tool.`,
   ].join("\n");
 }
 
@@ -144,6 +196,10 @@ export function buildContinuationMessage(parsed: ParsedSuperSummary): string {
     "# Supercompaction context",
     "",
     parsed.summary,
+    "",
+    "## File-context guidance",
+    "",
+    "After compaction, a file's presence in a file ledger records prior interaction with that path; it does not guarantee that its exact contents remain in active context, that the read was complete, or that the file is unchanged. Before relying on exact file contents for the next action, reread relevant files as needed. Choose targeted rereads based on the task; do not reread everything or repeat completed investigation.",
     "",
     "## Continuation directive",
     "",
@@ -162,22 +218,131 @@ function isSummaryRequestMessage(
   );
 }
 
+function isRestoredContextMessage(
+  message: ContextMessage,
+): message is CustomContextMessage {
+  return (
+    message.role === "custom" && message.customType === CONTEXT_MESSAGE_TYPE
+  );
+}
+
 function requestIdFromDetails(details: unknown): string | undefined {
   if (!isRecord(details)) return undefined;
   const requestId = (details as SummaryRequestDetails).requestId;
   return typeof requestId === "string" ? requestId : undefined;
 }
 
+function summaryFromDetails(details: unknown): string | undefined {
+  if (!isRecord(details)) return undefined;
+  const summary = (details as RestoredContextDetails).summary;
+  return typeof summary === "string" ? summary : undefined;
+}
+
 export default function supercompactExtension(pi: ExtensionAPI): void {
   let request: SupercompactRequest | undefined;
+  let decisionToolRegistered = false;
+  const activeDecisionToolCallIds = new Set<string>();
+
+  const deactivateDecisionTool = (): void => {
+    const activeTools = pi.getActiveTools();
+    if (!activeTools.includes(DECISION_TOOL_NAME)) return;
+    pi.setActiveTools(
+      activeTools.filter((toolName) => toolName !== DECISION_TOOL_NAME),
+    );
+  };
+
+  const clearTransientState = (ctx?: ExtensionContext): void => {
+    deactivateDecisionTool();
+    activeDecisionToolCallIds.clear();
+    if (ctx) setWorkingMessage(ctx);
+  };
 
   const fail = (ctx: ExtensionContext, message: string): void => {
+    clearTransientState(ctx);
     request = undefined;
     notify(ctx, `Supercompact failed: ${message}`, "error");
   };
 
+  const ensureDecisionTool = (): boolean => {
+    if (!decisionToolRegistered) {
+      pi.registerTool({
+        name: DECISION_TOOL_NAME,
+        label: "Supercompact Decision",
+        description:
+          "Record whether supercompaction should continue authorized incomplete work or wait after compaction. Use exactly once after writing the requested Markdown handoff.",
+        parameters: DecisionParameters,
+        async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+          if (!request || request.phase !== "awaiting-summary") {
+            throw new Error("No supercompact summary is awaiting a decision.");
+          }
+          if (!request.currentBatchValid) {
+            throw new Error(
+              `Call ${DECISION_TOOL_NAME} exactly once and do not call other tools in the same response.`,
+            );
+          }
+          if (!request.summary) {
+            throw new Error(
+              "Write the requested non-empty Markdown handoff before recording its continuation decision.",
+            );
+          }
+
+          request.action = params.continuation;
+          request.phase = "summary-ready";
+          request.error = undefined;
+          clearTransientState(ctx);
+          notify(
+            ctx,
+            params.continuation === "continue"
+              ? "Super-summary prepared. After compaction, the agent will continue working."
+              : "Super-summary prepared. After compaction, the agent will wait for further instructions before proceeding.",
+          );
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Recorded supercompact continuation decision: ${params.continuation}.`,
+              },
+            ],
+            details: {
+              requestId: request.id,
+              continuation: params.continuation,
+            } satisfies DecisionToolDetails,
+            terminate: true,
+          };
+        },
+        renderCall() {
+          return staticComponent([]);
+        },
+        renderResult(_result, _options, _theme, context) {
+          return staticComponent(
+            context.isError
+              ? [
+                  "Continuation metadata was invalid; asking the agent to correct it.",
+                ]
+              : [],
+          );
+        },
+      });
+      decisionToolRegistered = true;
+    }
+
+    const activeTools = pi.getActiveTools();
+    if (!activeTools.includes(DECISION_TOOL_NAME)) {
+      pi.setActiveTools([...activeTools, DECISION_TOOL_NAME]);
+    }
+    return pi.getActiveTools().includes(DECISION_TOOL_NAME);
+  };
+
   const finish = (ctx: ExtensionContext): void => {
-    if (!request || request.phase !== "compacting") return;
+    if (
+      !request ||
+      request.phase !== "compacting" ||
+      !request.action ||
+      !request.summary
+    ) {
+      return;
+    }
 
     const parsed: ParsedSuperSummary = {
       action: request.action,
@@ -186,35 +351,38 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     const content = buildContinuationMessage(parsed);
     request = undefined;
 
+    const message = {
+      customType: CONTEXT_MESSAGE_TYPE,
+      content,
+      display: false,
+      details: {
+        version: 2,
+        continuation: parsed.action,
+        summary: parsed.summary,
+      },
+    };
+
     if (parsed.action === "continue") {
-      pi.sendMessage(
-        {
-          customType: CONTEXT_MESSAGE_TYPE,
-          content,
-          display: false,
-          details: { version: 1, continuation: parsed.action },
-        },
-        { triggerTurn: true, deliverAs: "steer" },
-      );
+      pi.sendMessage(message, {
+        triggerTurn: true,
+        deliverAs: "steer",
+      });
       return;
     }
 
     pi.sendMessage(
-      {
-        customType: CONTEXT_MESSAGE_TYPE,
-        content,
-        display: false,
-        details: { version: 1, continuation: parsed.action },
-      },
+      message,
       ctx.isIdle() ? undefined : { deliverAs: "nextTurn" },
     );
   };
 
-  pi.on("session_start", () => {
+  pi.on("session_start", (_event, ctx) => {
+    clearTransientState(ctx);
     request = undefined;
   });
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", (_event, ctx) => {
+    clearTransientState(ctx);
     request = undefined;
   });
 
@@ -223,26 +391,130 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       request?.phase === "queued" || request?.phase === "awaiting-summary"
         ? request.id
         : undefined;
-    const messages = event.messages.filter((message) => {
-      if (isSummaryRequestMessage(message)) {
-        return requestIdFromDetails(message.details) === activeRequestId;
-      }
-      if (message.role === "assistant") {
-        return textFromAssistant(message) !== SUMMARY_PLACEHOLDER;
-      }
-      return true;
+    const preserveActiveDecisionArtifacts =
+      request?.phase === "awaiting-summary";
+
+    let latestContextIndex = -1;
+    const restoredSummaries = new Set<string>();
+    event.messages.forEach((message, index) => {
+      if (!isRestoredContextMessage(message)) return;
+      latestContextIndex = index;
+      const summary = summaryFromDetails(message.details);
+      if (summary) restoredSummaries.add(summary);
     });
 
-    return messages.length === event.messages.length ? undefined : { messages };
+    let changed = false;
+    const messages: ContextMessage[] = [];
+
+    event.messages.forEach((message, index) => {
+      if (isSummaryRequestMessage(message)) {
+        if (requestIdFromDetails(message.details) === activeRequestId) {
+          messages.push(message);
+        } else {
+          changed = true;
+        }
+        return;
+      }
+
+      if (isRestoredContextMessage(message)) {
+        if (index === latestContextIndex) {
+          messages.push(message);
+        } else {
+          changed = true;
+        }
+        return;
+      }
+
+      if (
+        message.role === "toolResult" &&
+        message.toolName === DECISION_TOOL_NAME
+      ) {
+        if (
+          preserveActiveDecisionArtifacts &&
+          activeDecisionToolCallIds.has(message.toolCallId)
+        ) {
+          messages.push(message);
+        } else {
+          changed = true;
+        }
+        return;
+      }
+
+      if (message.role === "assistant") {
+        const assistantText = textFromAssistant(message);
+        if (
+          assistantText === LEGACY_SUMMARY_PLACEHOLDER ||
+          restoredSummaries.has(assistantText)
+        ) {
+          changed = true;
+          return;
+        }
+
+        if (!Array.isArray(message.content)) {
+          messages.push(message);
+          return;
+        }
+
+        const content = message.content.filter((part) => {
+          if (!isDecisionToolCallPart(part)) return true;
+          if (
+            preserveActiveDecisionArtifacts &&
+            isRecord(part) &&
+            typeof part.id === "string" &&
+            activeDecisionToolCallIds.has(part.id)
+          ) {
+            return true;
+          }
+          changed = true;
+          return false;
+        });
+
+        if (content.length === 0) {
+          if (content.length !== message.content.length) changed = true;
+          return;
+        }
+        if (content.length !== message.content.length) {
+          messages.push({ ...message, content });
+        } else {
+          messages.push(message);
+        }
+        return;
+      }
+
+      messages.push(message);
+    });
+
+    return changed ? { messages } : undefined;
   });
 
-  pi.on("tool_call", (_event) => {
+  pi.on("tool_call", (event) => {
     if (request?.phase !== "awaiting-summary") return;
+
+    if (event.toolName === DECISION_TOOL_NAME && request.currentBatchValid) {
+      return;
+    }
+
     return {
       block: true,
       reason:
-        "Tools are disabled while preparing a supercompact summary. Return the required <supercompact> wrapper without calling tools.",
+        event.toolName === DECISION_TOOL_NAME
+          ? `Call ${DECISION_TOOL_NAME} exactly once and do not call other tools in the same response.`
+          : `Tools other than ${DECISION_TOOL_NAME} are disabled while preparing a supercompact summary.`,
     };
+  });
+
+  pi.on("tool_result", (event, ctx) => {
+    if (
+      request?.phase !== "awaiting-summary" ||
+      !event.isError ||
+      request.attempts < MAX_SUMMARY_ATTEMPTS
+    ) {
+      return;
+    }
+
+    request.error = `the continuation decision remained invalid after ${MAX_SUMMARY_ATTEMPTS} attempts`;
+    clearTransientState(ctx);
+    ctx.abort();
   });
 
   pi.on("message_end", (event, ctx) => {
@@ -254,6 +526,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       requestIdFromDetails(event.message.details) === request.id
     ) {
       request.phase = "awaiting-summary";
+      setWorkingMessage(ctx, "Creating super-summary…");
       return;
     }
 
@@ -264,36 +537,37 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    if (hasToolCalls(event.message)) return;
+    request.attempts += 1;
+    if (request.attempts > MAX_SUMMARY_ATTEMPTS) {
+      request.error = `the summary remained invalid after ${MAX_SUMMARY_ATTEMPTS} attempts`;
+      clearTransientState(ctx);
+      ctx.abort();
+      return;
+    }
 
     if (
       event.message.stopReason === "aborted" ||
       event.message.stopReason === "error" ||
       event.message.stopReason === "length"
     ) {
-      request.parseError = `summary response ended with ${event.message.stopReason}`;
+      request.error = `summary response ended with ${event.message.stopReason}`;
+      request.currentBatchValid = false;
       return;
     }
 
-    const parsed = parseSuperSummary(textFromAssistant(event.message));
-    if (!parsed) {
-      request.parseError =
-        "summary response did not contain the required wrapper";
-      return;
+    const summary = textFromAssistant(event.message);
+    if (!request.summary && summary) request.summary = summary;
+
+    const toolCalls = toolCallsFromAssistant(event.message);
+    for (const toolCall of toolCalls) {
+      if (toolCall.name === DECISION_TOOL_NAME) {
+        activeDecisionToolCallIds.add(toolCall.id);
+      }
     }
 
-    request.action = parsed.action;
-    request.summary = parsed.summary;
-    request.phase = "summary-ready";
-    request.parseError = undefined;
-    notify(ctx, SUMMARY_PLACEHOLDER);
-
-    return {
-      message: {
-        ...event.message,
-        content: [{ type: "text", text: parsed.summary }],
-      },
-    };
+    request.currentBatchValid =
+      toolCalls.length === 1 && toolCalls[0].name === DECISION_TOOL_NAME;
+    request.error = undefined;
   });
 
   pi.on("session_compact", () => {
@@ -304,10 +578,36 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     if (!request) return;
 
     if (request.phase === "queued" || request.phase === "awaiting-summary") {
+      if (request.error) {
+        fail(ctx, request.error);
+        return;
+      }
+
+      if (
+        request.phase === "awaiting-summary" &&
+        request.summary &&
+        !request.correctionSent &&
+        request.attempts < MAX_SUMMARY_ATTEMPTS
+      ) {
+        request.correctionSent = true;
+        request.currentBatchValid = false;
+        pi.sendMessage(
+          {
+            customType: SUMMARY_REQUEST_TYPE,
+            content: `The Markdown super-summary has been captured. Do not repeat it. Call ${DECISION_TOOL_NAME} exactly once now with continuation set to continue or stop. Do not call any other tool or emit additional commentary.`,
+            display: false,
+            details: { version: 2, requestId: request.id, correction: true },
+          },
+          { triggerTurn: true, deliverAs: "steer" },
+        );
+        return;
+      }
+
       fail(
         ctx,
-        request.parseError ??
-          "the summary turn settled without a valid summary",
+        request.summary
+          ? "the summary turn settled without a valid continuation decision"
+          : "the summary turn settled without a usable summary",
       );
       return;
     }
@@ -335,25 +635,48 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         return;
       }
 
+      const extraContext = args.trim();
+      const idle = ctx.isIdle();
       const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
       request = {
         id,
         phase: "queued",
-        extraContext: args.trim(),
-        action: "stop",
-        summary: "",
         compactionCompleted: false,
+        attempts: 0,
+        correctionSent: false,
+        currentBatchValid: false,
       };
 
-      notify(ctx, "Supercompact queued.");
+      if (!ensureDecisionTool()) {
+        request = undefined;
+        notify(
+          ctx,
+          "Supercompact failed: the internal continuation-decision tool is unavailable in this session.",
+          "error",
+        );
+        return;
+      }
+
+      if (extraContext) {
+        notify(
+          ctx,
+          `${idle ? "Creating super-summary." : "Supercompaction queued; finishing the current tool batch first."}\nExtra instructions: ${extraContext}`,
+        );
+      } else if (!idle) {
+        notify(
+          ctx,
+          "Supercompaction queued; finishing the current tool batch first.",
+        );
+      }
+
       pi.sendMessage(
         {
           customType: SUMMARY_REQUEST_TYPE,
-          content: buildSummaryPrompt(request.extraContext),
+          content: buildSummaryPrompt(extraContext),
           display: false,
-          details: { version: 1, requestId: id },
+          details: { version: 2, requestId: id },
         },
-        ctx.isIdle()
+        idle
           ? { triggerTurn: true, deliverAs: "steer" }
           : { deliverAs: "steer" },
       );
