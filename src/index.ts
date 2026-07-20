@@ -183,7 +183,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         {
           customType: CONTEXT_MESSAGE_TYPE,
           content,
-          display: true,
+          display: false,
           details: { version: 1, continuation: parsed.action },
         },
         { triggerTurn: true, deliverAs: "steer" },
@@ -195,7 +195,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       {
         customType: CONTEXT_MESSAGE_TYPE,
         content,
-        display: true,
+        display: false,
         details: { version: 1, continuation: parsed.action },
       },
       ctx.isIdle() ? undefined : { deliverAs: "nextTurn" },
@@ -237,7 +237,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     };
   });
 
-  pi.on("message_end", (event) => {
+  pi.on("message_end", (event, ctx) => {
     if (!request) return;
 
     if (
@@ -278,11 +278,12 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     request.summary = parsed.summary;
     request.phase = "summary-ready";
     request.parseError = undefined;
+    notify(ctx, SUMMARY_PLACEHOLDER);
 
     return {
       message: {
         ...event.message,
-        content: [{ type: "text", text: SUMMARY_PLACEHOLDER }],
+        content: [{ type: "text", text: parsed.summary }],
       },
     };
   });

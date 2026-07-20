@@ -155,8 +155,12 @@ describe("supercompact workflow", () => {
     );
 
     expect(replacement.message.content).toEqual([
-      { type: "text", text: "Super-summary prepared; compacting context." },
+      { type: "text", text: "## State\nKeep going." },
     ]);
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Super-summary prepared; compacting context.",
+      "info",
+    );
 
     harness.handlers.get("agent_settled")?.({}, harness.ctx);
     expect(harness.ctx.compact).toHaveBeenCalledOnce();
@@ -166,7 +170,7 @@ describe("supercompact workflow", () => {
 
     const [finalMessage, finalOptions] = harness.pi.sendMessage.mock.calls[1];
     expect(finalMessage.customType).toBe("pi-supercompact:context");
-    expect(finalMessage.display).toBe(true);
+    expect(finalMessage.display).toBe(false);
     expect(finalMessage.content).toContain("## State\nKeep going.");
     expect(finalOptions).toEqual({ triggerTurn: true, deliverAs: "steer" });
   });
@@ -192,6 +196,7 @@ describe("supercompact workflow", () => {
     expect(harness.ctx.compact).not.toHaveBeenCalled();
     const [finalMessage, finalOptions] = harness.pi.sendMessage.mock.calls[1];
     expect(finalMessage.content).toContain("## State\nDone.");
+    expect(finalMessage.display).toBe(false);
     expect(finalOptions).toBeUndefined();
   });
 

@@ -4,11 +4,12 @@ A power-user [Pi](https://pi.dev) extension that prepares a full-context continu
 
 ## Workflow
 
-`/supercompact [extra context]` performs three model-assisted steps:
+`/supercompact [extra context]` performs four steps:
 
 1. Queue a hidden full-context summarization prompt as immediate steering work.
-2. Run Pi's normal compaction after the summarization turn settles.
-3. Add the visible super-summary after the compaction entry and either continue or wait.
+2. Leave the validated super-summary in the transcript as a normal assistant message.
+3. Run Pi's normal compaction after the summarization turn settles.
+4. Restore the exact summary invisibly after compaction and either continue or wait.
 
 The summary prompt distills the behavior of a practical session-context handoff. It records goals, completed and in-progress work, decisions, concrete paths and commands, verification, blockers, and where to resume. It also returns a structured continuation decision.
 
@@ -58,7 +59,7 @@ The summarization turn selects one action:
 - `continue` when extra context explicitly requests continuation, or authorized actionable work remains incomplete and does not require new user input.
 - `stop` when extra context requests stopping, work is complete, no actionable work remains, or the agent needs user input or approval.
 
-Explicit command context takes precedence. A `continue` result triggers a new turn after compaction. A `stop` result adds the summary without triggering a turn.
+Explicit command context takes precedence. A `continue` result triggers one normal agent turn after compaction. A `stop` result restores the summary without triggering a turn.
 
 ## Queue behavior
 
@@ -83,7 +84,7 @@ The workflow is best-effort and leaves the session usable:
 - Errors are reported through Pi notifications rather than thrown into the session.
 - If Pi independently auto-compacts before a later workflow error, that native compaction cannot be rolled back.
 
-The intermediate summary response is replaced with a compact transcript line. The full summary is displayed only after successful compaction.
+A valid generated summary remains visible as a normal assistant message, without its structured wrapper. The extension shows `Super-summary prepared; compacting context.` as an informational notification, then Pi displays its normal compaction entry. The exact summary is also restored after compaction as a hidden context message, so it remains available to the model without appearing twice in the transcript.
 
 ## Requirements
 
