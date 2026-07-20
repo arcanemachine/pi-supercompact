@@ -1,19 +1,15 @@
 # pi-supercompact
 
-A power-user [Pi](https://pi.dev) extension that prepares a full-context continuation summary, runs Pi's native compaction, then restores the richer summary and resumes unfinished work when appropriate.
+A simple [Pi](https://pi.dev) extension that exposes a single command: `/supercompact`, which works mostly like the native `/compact`, but is intended to work a little better.
 
-## Workflow
+The goal of this extension is prevent the model from forgetting the important details of what it was working on before compaction.
 
-`/supercompact [extra context]` performs four steps:
+This extension that prepares a full-context continuation summary, runs Pi's native compaction, then restores the richer summary and resumes unfinished work when appropriate.
 
-1. Queue a hidden full-context summarization prompt as immediate steering work.
-2. Leave the validated super-summary in the transcript as a normal assistant message.
-3. Run Pi's normal compaction after the summarization turn settles.
-4. Restore the exact summary invisibly after compaction and either continue or wait.
+## Requirements
 
-The summary prompt distills the behavior of a practical session-context handoff. It records goals, completed and in-progress work, decisions, concrete paths and commands, verification, blockers, and where to resume. It also returns a structured continuation decision.
-
-The extension uses the currently selected model. It does not load or invoke an external skill.
+- Pi 0.80.10 or later
+- Node.js 22.19.0 or later for package development
 
 ## Installation
 
@@ -52,7 +48,26 @@ Examples:
 
 Extra context affects only the super-summary and continuation decision. Pi's native compaction prompt remains unchanged.
 
-## Continuation behavior
+## How it works
+
+The extension does not replace or customize Pi's compaction summary. It calls the native compaction operation with no custom instructions.
+
+Pi may automatically compact after the super-summary turn if that turn crosses the configured threshold. A successful automatic compaction satisfies the workflow's compaction step; the extension does not attempt a redundant second compaction.
+
+### Workflow
+
+`/supercompact [extra context]` performs four steps:
+
+1. Queue a hidden full-context summarization prompt as immediate steering work.
+2. Leave the validated super-summary in the transcript as a normal assistant message.
+3. Run Pi's normal compaction after the summarization turn settles.
+4. Restore the exact summary invisibly after compaction and either continue or wait.
+
+The summary prompt distills the behavior of a practical session-context handoff. It records goals, completed and in-progress work, decisions, concrete paths and commands, verification, blockers, and where to resume. It also returns a structured continuation decision.
+
+The extension uses the currently selected model. It does not load or invoke an external skill.
+
+### Continuation behavior
 
 The summarization turn makes a conservative continuation decision and defaults to `stop` when uncertain:
 
@@ -61,7 +76,7 @@ The summarization turn makes a conservative continuation decision and defaults t
 
 Summary emphasis in extra context does not imply continuation. The model is instructed not to invent or broaden work. A `continue` result triggers one normal agent turn after compaction; a `stop` result restores the summary without triggering a turn.
 
-## Queue behavior
+### Queue behavior
 
 When Pi is already responding, `/supercompact` queues its summarization prompt with immediate steering semantics. The current assistant tool batch finishes first, then Pi processes the summary prompt before its next normal continuation.
 
@@ -69,13 +84,7 @@ Other messages retain Pi's native queue behavior. For the most precise compactio
 
 A second `/supercompact` is rejected while one is active.
 
-## Native and automatic compaction
-
-The extension does not replace or customize Pi's compaction summary. It calls the native compaction operation with no custom instructions.
-
-Pi may automatically compact after the super-summary turn if that turn crosses the configured threshold. A successful automatic compaction satisfies the workflow's compaction step; the extension does not attempt a redundant second compaction.
-
-## Failure behavior
+### Failure behavior
 
 The workflow is best-effort and leaves the session usable:
 
@@ -85,11 +94,6 @@ The workflow is best-effort and leaves the session usable:
 - If Pi independently auto-compacts before a later workflow error, that native compaction cannot be rolled back.
 
 A valid generated summary remains visible as a normal assistant message, without its structured wrapper. The extension shows `Super-summary prepared; compacting context.` as an informational notification, then Pi displays its normal compaction entry. The exact summary is also restored after compaction as a hidden context message, so it remains available to the model without appearing twice in the transcript.
-
-## Requirements
-
-- Pi 0.80.10 or later
-- Node.js 22.19.0 or later for package development
 
 ## Development
 
@@ -103,7 +107,3 @@ npm pack --dry-run
 ```
 
 The package is source-loaded by Pi from `src/index.ts`; no compiled runtime artifact is required.
-
-## License
-
-MIT. See [LICENSE.md](./LICENSE.md).
