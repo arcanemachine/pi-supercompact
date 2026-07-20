@@ -96,6 +96,11 @@ describe("summary helpers", () => {
     expect(prompt).toContain("stop after compaction");
     expect(prompt).toContain('<supercompact continuation="continue|stop">');
     expect(prompt).toContain("Do not call tools");
+    expect(prompt).toContain('When uncertain, choose continuation="stop"');
+    expect(prompt).toContain("optional improvements");
+    expect(prompt).toContain(
+      "merely emphasizes part of the summary does not imply continuation",
+    );
   });
 
   it("parses continuation wrappers and optional XML fences", () => {

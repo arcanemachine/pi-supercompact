@@ -54,12 +54,12 @@ Extra context affects only the super-summary and continuation decision. Pi's nat
 
 ## Continuation behavior
 
-The summarization turn selects one action:
+The summarization turn makes a conservative continuation decision and defaults to `stop` when uncertain:
 
-- `continue` when extra context explicitly requests continuation, or authorized actionable work remains incomplete and does not require new user input.
-- `stop` when extra context requests stopping, work is complete, no actionable work remains, or the agent needs user input or approval.
+- `continue` only when the user explicitly requests further work on an identifiable authorized task, or the assistant was actively executing one immediately before supercompaction and has a concrete next action that needs no user input.
+- `stop` when work is complete, the assistant delivered a final result, user input or approval is needed, or remaining possibilities are optional, speculative, or unauthorized.
 
-Explicit command context takes precedence. A `continue` result triggers one normal agent turn after compaction. A `stop` result restores the summary without triggering a turn.
+Summary emphasis in extra context does not imply continuation. The model is instructed not to invent or broaden work. A `continue` result triggers one normal agent turn after compaction; a `stop` result restores the summary without triggering a turn.
 
 ## Queue behavior
 
