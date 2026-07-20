@@ -1,0 +1,63 @@
+{
+  "name": "@arcanemachine/pi-supercompact",
+  "version": "0.1.0",
+  "description": "Power-user supercompaction workflow for Pi",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package",
+    "compaction",
+    "context"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "format": "prettier --write src/**/*.ts tests/**/*.ts package.json README.md AGENTS.md CHANGELOG.md"
+  },
+  "author": "Nicholas Moen",
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.80.10",
+    "@types/node": "^25.3.0",
+    "prettier": "^3.8.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.6"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arcanemachine/pi-supercompact.git"
+  },
+  "homepage": "https://github.com/arcanemachine/pi-supercompact#readme",
+  "bugs": {
+    "url": "https://github.com/arcanemachine/pi-supercompact/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
