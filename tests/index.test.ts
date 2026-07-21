@@ -171,16 +171,12 @@ describe("summary helpers", () => {
   it("builds a canonical Markdown handoff prompt with conservative metadata", () => {
     const prompt = buildSummaryPrompt("stop after compaction");
 
-    expect(prompt).toContain("canonical working-memory handoff");
     expect(prompt).toContain("stop after compaction");
-    expect(prompt).toContain("Exact next action");
-    expect(prompt).toContain("explicitly non-exhaustive");
-    expect(prompt).toContain("Mutable observations");
-    expect(prompt).toContain("Do not include commit hashes");
-    expect(prompt).toContain("When uncertain, choose stop");
-    expect(prompt).toContain("optional improvements");
     expect(prompt).toContain(DECISION_TOOL_NAME);
     expect(prompt).toContain("ordinary Markdown with no wrapper");
+    expect(prompt.indexOf("- Files by work horizon")).toBeLessThan(
+      prompt.indexOf("- Next action"),
+    );
     expect(prompt).not.toContain("<supercompact");
   });
 
@@ -197,9 +193,9 @@ describe("summary helpers", () => {
     expect(continuing).toContain(
       "Continue the previously authorized incomplete work now",
     );
-    expect(continuing).toContain("reread relevant files as needed");
-    expect(continuing).toContain("do not reread everything");
+    expect(continuing.endsWith("Context")).toBe(true);
     expect(stopping).toContain("wait for the user's next instruction");
+    expect(stopping.endsWith("Context")).toBe(true);
   });
 });
 

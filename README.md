@@ -69,16 +69,15 @@ The currently selected model and authentication are used. The extension does not
 
 The prompt treats the newest super-summary as the canonical working-memory handoff. It prioritizes:
 
-- the current objective and exact next action;
-- authorization boundaries and approved decisions;
-- current state, open decisions, and blockers;
-- verified results separately from mutable observations and unverified claims;
-- a focused, explicitly non-exhaustive list of continuation-important files;
-- completed history compressed to outcomes and material rationale.
+- the current objective, direction, authorization boundaries, and state;
+- open decisions and blockers;
+- verified results separately from mutable observations and unverified information;
+- completed history compressed to outcomes and material rationale;
+- one concrete next action as the final section.
 
-File read completeness is recorded only when genuinely known. Commit hashes, blob hashes, forensic provenance identifiers, and diary-style closed history are omitted.
+Files are grouped only when useful under `Needed now`, `Needed for confirmed upcoming work`, and `Durable references`. Each entry gives an exact path and why it matters. The summary does not report historical read status or reproduce a mechanical path ledger, and file references do not instruct the resumed agent to read everything immediately.
 
-Pi's native compaction may separately retain a broader mechanical ledger of paths used by file tools. A ledger entry does not guarantee that a read was complete, that exact contents remain active after compaction, or that a file is unchanged. The restored handoff directs the resumed agent to make targeted rereads when exact contents matter, rather than rereading everything or repeating completed investigation.
+When direction changed during the conversation, the summary records the current direction and mentions older direction only when needed to prevent incorrect continuation. Commit hashes, blob hashes, forensic provenance identifiers, and diary-style closed history are omitted.
 
 ### Continuation behavior
 
