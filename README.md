@@ -32,19 +32,51 @@ pi -e ./src/index.ts
 ## Command
 
 ```text
-/supercompact [extra context]
+/supercompact
+/supercompact run [extra context]
+/supercompact allow
+/supercompact enable
+/supercompact disable
 ```
+
+`/supercompact` opens a menu. Choosing **Run supercompact now** opens an editor for optional extra context. Explicit `run`, `allow`, `enable`, and `disable` subcommands also work without interactive UI.
 
 Examples:
 
 ```text
-/supercompact
-/supercompact continue after compaction
-/supercompact stop after compaction
-/supercompact emphasize verification results and unresolved test failures
+/supercompact run
+/supercompact run continue after compaction
+/supercompact run stop after compaction
+/supercompact run emphasize verification results and unresolved test failures
 ```
 
 Extra context affects only the super-summary and continuation decision. Pi's native compaction prompt remains unchanged. When present, the extension echoes the extra context once in its initial notification so the user can confirm it was captured.
+
+### Agent tool authorization
+
+The extension registers an agent-callable `supercompact` tool but keeps it inactive by default:
+
+- `/supercompact allow` exposes the tool for one accepted agent invocation.
+- `/supercompact enable` exposes it for repeated use during the current session.
+- `/supercompact disable` removes access and cancels an unused one-shot authorization.
+
+A one-shot authorization is consumed when the extension accepts the agent's tool call, even if summarization or compaction later fails. It is not persisted across reloads or session changes. The tool remains schema-active until that supercompaction finishes, avoiding an extra active-tool change before compaction, but execution guards reject duplicate or recursive calls. Enabled mode remains active between workflows.
+
+Direct `/supercompact run` requests are always allowed because the command itself is an explicit user action.
+
+While authorization is active, Pi shows `supercompact: allowed once` or `supercompact: agent enabled` in the status area. The tool definition does not add a prompt snippet or prompt guideline. Activating or explicitly disabling it can still change the provider's active tool schema and may cause a prompt-cache miss; one-shot removal is deferred until after compaction, when conversation context has already changed.
+
+### Configuration
+
+Persistent opt-in uses an extension-specific JSON file:
+
+```json
+{
+  "agentToolEnabled": true
+}
+```
+
+The global file is `~/.pi/agent/pi-supercompact.json`. A trusted project may override it with `<project>/.pi/pi-supercompact.json`. The default is `false`; malformed configuration fails closed. The `enable` and `disable` commands override the configured default only for the current session and do not rewrite either file.
 
 ## How it works
 
@@ -54,7 +86,7 @@ Pi may automatically compact after the super-summary turn if that turn crosses t
 
 ### Workflow
 
-`/supercompact [extra context]` performs four steps:
+A user command or authorized agent tool invocation performs four steps:
 
 1. Queue a hidden full-context summarization prompt as immediate steering work.
 2. Keep the generated super-summary in the transcript as ordinary assistant Markdown and record a schema-validated `continue` or `stop` decision with a temporary internal tool.
@@ -92,7 +124,7 @@ Only the newest hidden super-summary is exposed to later model turns. The visibl
 
 ### Queue and UI behavior
 
-When Pi is already responding, `/supercompact` queues its summarization prompt with immediate steering semantics. The current assistant tool batch finishes first, then Pi processes the summary prompt before its next normal continuation.
+When Pi is already responding, `/supercompact run` or the authorized agent tool queues its summarization prompt with immediate steering semantics. The current assistant tool batch finishes first, then Pi processes the summary prompt before its next normal continuation.
 
 While the summary is generated, Pi's working indicator shows `Creating super-summary…`. Once the decision is validated, the extension reports whether the agent will continue or wait, restores Pi's default working state, and lets native compaction display its normal loader.
 
@@ -107,7 +139,7 @@ When Pi is idle, the first line is `Creating super-summary.` instead.
 
 Other messages retain Pi's native queue behavior. For the most precise compaction boundary, avoid submitting another prompt until supercompaction finishes. Additional messages are not blocked, but they can move compaction later than the command invocation.
 
-A second `/supercompact` is rejected while one is active.
+A second supercompact request is rejected while one is active. During the dedicated summary turn, every tool except the internal continuation-decision tool is blocked.
 
 ### Failure behavior
 

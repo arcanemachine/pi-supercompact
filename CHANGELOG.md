@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add an agent-callable `supercompact` tool with one-shot and session authorization gates.
+- Add `/supercompact` menu and explicit `run`, `allow`, `enable`, and `disable` subcommands.
+- Add global and trusted-project configuration for the default agent-tool state.
+- Defer one-shot tool removal until the workflow settles to reduce prompt-cache churn.
 - Preserve established non-obvious constraints and source-of-truth decisions across continuation.
 - Keep resumed next actions subordinate to recorded scope and responsibility boundaries.
 

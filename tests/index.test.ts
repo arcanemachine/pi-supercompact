@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import extension, {
@@ -5,18 +6,49 @@ import extension, {
   buildSummaryPrompt,
 } from "../src/index.js";
 
+vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
+
+const readFileSyncMock = vi.mocked(readFileSync);
+
 type Handler = (event: any, ctx: any) => any;
 
 const DECISION_TOOL_NAME = "record_supercompact_decision";
+const AGENT_TOOL_NAME = "supercompact";
+const PROJECT_CWD = "/workspace/test-project";
 
-function createHarness(
-  options: { idle?: boolean; allowDecisionTool?: boolean } = {},
-) {
+interface HarnessOptions {
+  idle?: boolean;
+  hasUI?: boolean;
+  allowDecisionTool?: boolean;
+  allowAgentTool?: boolean;
+  projectTrusted?: boolean;
+  globalConfig?: string;
+  projectConfig?: string;
+}
+
+function missingFile(): Error & { code: string } {
+  return Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+}
+
+function createHarness(options: HarnessOptions = {}) {
+  readFileSyncMock.mockImplementation((path) => {
+    const value = String(path);
+    if (value === `${PROJECT_CWD}/.pi/pi-supercompact.json`) {
+      if (options.projectConfig !== undefined) return options.projectConfig;
+      throw missingFile();
+    }
+    if (value.endsWith("/pi-supercompact.json")) {
+      if (options.globalConfig !== undefined) return options.globalConfig;
+      throw missingFile();
+    }
+    throw missingFile();
+  });
+
   const handlers = new Map<string, Handler>();
   let command:
     | { handler: (args: string, ctx: any) => Promise<void> }
     | undefined;
-  let decisionTool: any;
+  const tools = new Map<string, any>();
   let activeTools = ["read", "bash"];
 
   const pi = {
@@ -27,29 +59,49 @@ function createHarness(
       command = value;
     }),
     registerTool: vi.fn((value: any) => {
-      decisionTool = value;
+      tools.set(value.name, value);
+      if (!activeTools.includes(value.name)) activeTools.push(value.name);
+      if (
+        (options.allowDecisionTool === false &&
+          value.name === DECISION_TOOL_NAME) ||
+        (options.allowAgentTool === false && value.name === AGENT_TOOL_NAME)
+      ) {
+        activeTools = activeTools.filter((name) => name !== value.name);
+      }
     }),
     getActiveTools: vi.fn(() => [...activeTools]),
     setActiveTools: vi.fn((toolNames: string[]) => {
-      activeTools =
-        options.allowDecisionTool === false
-          ? toolNames.filter((toolName) => toolName !== DECISION_TOOL_NAME)
-          : [...toolNames];
+      activeTools = toolNames.filter(
+        (toolName) =>
+          !(
+            options.allowDecisionTool === false &&
+            toolName === DECISION_TOOL_NAME
+          ) &&
+          !(options.allowAgentTool === false && toolName === AGENT_TOOL_NAME),
+      );
     }),
     sendMessage: vi.fn(),
   } as unknown as ExtensionAPI;
-  extension(pi);
 
   const ctx = {
-    hasUI: true,
+    cwd: PROJECT_CWD,
+    mode: "tui",
+    hasUI: options.hasUI ?? true,
+    isProjectTrusted: vi.fn(() => options.projectTrusted ?? true),
     isIdle: vi.fn(() => options.idle ?? true),
     ui: {
       notify: vi.fn(),
+      select: vi.fn(),
+      editor: vi.fn(),
+      setStatus: vi.fn(),
       setWorkingMessage: vi.fn(),
     },
     compact: vi.fn(),
     abort: vi.fn(),
   };
+
+  extension(pi);
+  handlers.get("session_start")?.({ reason: "startup" }, ctx);
 
   return {
     pi: pi as any,
@@ -60,8 +112,14 @@ function createHarness(
       return command;
     },
     decisionTool: () => {
-      if (!decisionTool) throw new Error("decision tool not registered");
-      return decisionTool;
+      const tool = tools.get(DECISION_TOOL_NAME);
+      if (!tool) throw new Error("decision tool not registered");
+      return tool;
+    },
+    agentTool: () => {
+      const tool = tools.get(AGENT_TOOL_NAME);
+      if (!tool) throw new Error("agent tool not registered");
+      return tool;
     },
     activeTools: () => [...activeTools],
   };
@@ -151,7 +209,9 @@ async function beginSummary(
   harness: ReturnType<typeof createHarness>,
   extraContext = "",
 ) {
-  await harness.command().handler(extraContext, harness.ctx);
+  await harness
+    .command()
+    .handler(extraContext ? `run ${extraContext}` : "run", harness.ctx);
   const { message } = summaryRequestFrom(harness);
   harness.handlers.get("message_end")?.(customMessage(message), harness.ctx);
   return message;
@@ -165,6 +225,22 @@ async function executeDecision(
   return harness
     .decisionTool()
     .execute(toolCallId, { continuation }, undefined, undefined, harness.ctx);
+}
+
+async function prepareDecisionAndCompact(
+  harness: ReturnType<typeof createHarness>,
+  continuation: "continue" | "stop" = "stop",
+) {
+  const { message } = summaryRequestFrom(harness);
+  harness.handlers.get("message_end")?.(customMessage(message), harness.ctx);
+  harness.handlers.get("message_end")?.(
+    assistantMessage("## State\nAgent-triggered summary.", [
+      { id: "decision-1" },
+    ]),
+    harness.ctx,
+  );
+  await executeDecision(harness, continuation);
+  harness.handlers.get("agent_settled")?.({}, harness.ctx);
 }
 
 describe("summary helpers", () => {
@@ -208,10 +284,203 @@ describe("summary helpers", () => {
 describe("supercompact workflow", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("keeps the agent tool inactive by default", async () => {
+    const harness = createHarness();
+
+    expect(harness.activeTools()).toEqual(["read", "bash"]);
+    await expect(
+      harness
+        .agentTool()
+        .execute("agent-1", {}, undefined, undefined, harness.ctx),
+    ).rejects.toThrow("not authorized");
+  });
+
+  it("loads trusted project config over global config", () => {
+    const enabled = createHarness({
+      globalConfig: JSON.stringify({ agentToolEnabled: false }),
+      projectConfig: JSON.stringify({ agentToolEnabled: true }),
+    });
+    expect(enabled.activeTools()).toContain(AGENT_TOOL_NAME);
+
+    const disabled = createHarness({
+      globalConfig: JSON.stringify({ agentToolEnabled: true }),
+      projectConfig: JSON.stringify({ agentToolEnabled: false }),
+    });
+    expect(disabled.activeTools()).not.toContain(AGENT_TOOL_NAME);
+
+    const untrusted = createHarness({
+      globalConfig: JSON.stringify({ agentToolEnabled: true }),
+      projectConfig: JSON.stringify({ agentToolEnabled: false }),
+      projectTrusted: false,
+    });
+    expect(untrusted.activeTools()).toContain(AGENT_TOOL_NAME);
+  });
+
+  it("fails closed on invalid config", () => {
+    const harness = createHarness({
+      globalConfig: JSON.stringify({ agentToolEnabled: true }),
+      projectConfig: JSON.stringify({ agentToolEnabled: "yes" }),
+    });
+
+    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Ignoring invalid supercompact config"),
+      "warning",
+    );
+  });
+
+  it("opens a menu and editor for an interactive run", async () => {
+    const harness = createHarness();
+    harness.ctx.ui.select.mockResolvedValue("Run supercompact now");
+    harness.ctx.ui.editor.mockResolvedValue("focus on menu context");
+
+    await harness.command().handler("", harness.ctx);
+
+    expect(harness.ctx.ui.select).toHaveBeenCalledOnce();
+    expect(harness.ctx.ui.editor).toHaveBeenCalledOnce();
+    expect(summaryRequestFrom(harness).message.content).toContain(
+      "focus on menu context",
+    );
+  });
+
+  it("requires explicit syntax when the menu has no UI", async () => {
+    const harness = createHarness({ hasUI: false });
+
+    await harness.command().handler("", harness.ctx);
+    expect(harness.ctx.ui.select).not.toHaveBeenCalled();
+    expect(harness.pi.sendMessage).not.toHaveBeenCalled();
+
+    await harness.command().handler("run headless context", harness.ctx);
+    expect(summaryRequestFrom(harness).message.content).toContain(
+      "headless context",
+    );
+  });
+
+  it("authorizes one agent invocation and removes the tool after compaction", async () => {
+    const harness = createHarness({ idle: false });
+
+    await harness.command().handler("allow", harness.ctx);
+    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allowed once",
+    );
+
+    const result = await harness
+      .agentTool()
+      .execute(
+        "agent-1",
+        { extraContext: "preserve agent context" },
+        undefined,
+        undefined,
+        harness.ctx,
+      );
+    expect(result.details.authorization).toBe("once");
+    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
+    expect(harness.activeTools()).toContain(DECISION_TOOL_NAME);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      undefined,
+    );
+
+    await expect(
+      harness
+        .agentTool()
+        .execute("agent-2", {}, undefined, undefined, harness.ctx),
+    ).rejects.toThrow("already in progress");
+
+    await prepareDecisionAndCompact(harness);
+    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
+    expect(harness.activeTools()).not.toContain(DECISION_TOOL_NAME);
+
+    harness.ctx.compact.mock.calls[0][0].onComplete({});
+    expect(harness.activeTools()).toEqual(["read", "bash"]);
+    expect(harness.pi.sendMessage.mock.calls[1][0].details.summary).toContain(
+      "Agent-triggered summary",
+    );
+  });
+
+  it("keeps the enabled agent tool active after workflow success", async () => {
+    const harness = createHarness({ idle: false });
+
+    await harness.command().handler("enable", harness.ctx);
+    await harness
+      .agentTool()
+      .execute("agent-1", {}, undefined, undefined, harness.ctx);
+    await prepareDecisionAndCompact(harness);
+    harness.ctx.compact.mock.calls[0][0].onComplete({});
+
+    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
+    expect(harness.activeTools()).not.toContain(DECISION_TOOL_NAME);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: agent enabled",
+    );
+  });
+
+  it("keeps the enabled agent tool active after workflow failure", async () => {
+    const harness = createHarness({ idle: false });
+
+    await harness.command().handler("enable", harness.ctx);
+    await harness
+      .agentTool()
+      .execute("agent-1", {}, undefined, undefined, harness.ctx);
+    await prepareDecisionAndCompact(harness);
+    harness.ctx.compact.mock.calls[0][0].onError(new Error("provider failed"));
+
+    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
+    expect(harness.activeTools()).not.toContain(DECISION_TOOL_NAME);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: agent enabled",
+    );
+  });
+
+  it("clears an unused one-shot authorization on session reload", async () => {
+    const harness = createHarness();
+
+    await harness.command().handler("allow", harness.ctx);
+    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
+
+    harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
+
+    expect(harness.activeTools()).toEqual(["read", "bash"]);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      undefined,
+    );
+  });
+
+  it("disables an unused one-shot authorization immediately", async () => {
+    const harness = createHarness();
+
+    await harness.command().handler("allow", harness.ctx);
+    await harness.command().handler("disable", harness.ctx);
+
+    expect(harness.activeTools()).toEqual(["read", "bash"]);
+    await expect(
+      harness
+        .agentTool()
+        .execute("agent-1", {}, undefined, undefined, harness.ctx),
+    ).rejects.toThrow("not authorized");
+  });
+
+  it("rejects ambiguous legacy command arguments", async () => {
+    const harness = createHarness();
+
+    await harness.command().handler("focus on tests", harness.ctx);
+
+    expect(harness.pi.sendMessage).not.toHaveBeenCalled();
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("Usage: /supercompact"),
+      "error",
+    );
+  });
+
   it("queues steering while busy and echoes extra instructions once", async () => {
     const harness = createHarness({ idle: false });
 
-    await harness.command().handler("focus on tests", harness.ctx);
+    await harness.command().handler("run focus on tests", harness.ctx);
 
     const { message, options } = summaryRequestFrom(harness);
     expect(message.customType).toBe("pi-supercompact:summary-request");
@@ -244,7 +513,7 @@ describe("supercompact workflow", () => {
   it("fails safely when the internal tool is unavailable", async () => {
     const harness = createHarness({ allowDecisionTool: false });
 
-    await harness.command().handler("", harness.ctx);
+    await harness.command().handler("run", harness.ctx);
 
     expect(harness.pi.sendMessage).not.toHaveBeenCalled();
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
@@ -257,7 +526,7 @@ describe("supercompact workflow", () => {
 
   it("renders successful internal metadata without visible lines", async () => {
     const harness = createHarness();
-    await harness.command().handler("", harness.ctx);
+    await harness.command().handler("run", harness.ctx);
     const tool = harness.decisionTool();
 
     expect(tool.renderCall({}, {}, {}).render(80)).toEqual([]);
@@ -543,8 +812,8 @@ describe("supercompact workflow", () => {
 
   it("rejects a second request while one is active", async () => {
     const harness = createHarness();
-    await harness.command().handler("", harness.ctx);
-    await harness.command().handler("again", harness.ctx);
+    await harness.command().handler("run", harness.ctx);
+    await harness.command().handler("run again", harness.ctx);
 
     expect(harness.pi.sendMessage).toHaveBeenCalledOnce();
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(

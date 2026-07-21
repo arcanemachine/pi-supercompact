@@ -1,13 +1,20 @@
-import type {
-  ContextEvent,
-  ExtensionAPI,
-  ExtensionContext,
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  CONFIG_DIR_NAME,
+  getAgentDir,
+  type ContextEvent,
+  type ExtensionAPI,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 const SUMMARY_REQUEST_TYPE = "pi-supercompact:summary-request";
 const CONTEXT_MESSAGE_TYPE = "pi-supercompact:context";
 const DECISION_TOOL_NAME = "record_supercompact_decision";
+const AGENT_TOOL_NAME = "supercompact";
+const CONFIG_FILE_NAME = "pi-supercompact.json";
+const STATUS_KEY = "pi-supercompact";
 const LEGACY_SUMMARY_PLACEHOLDER =
   "Super-summary prepared; compacting context.";
 const MAX_SUMMARY_ATTEMPTS = 3;
@@ -50,6 +57,25 @@ interface DecisionToolDetails {
   continuation: ContinuationAction;
 }
 
+type AgentToolMode = "disabled" | "once" | "enabled";
+
+type ConfigReadResult =
+  | { kind: "absent" }
+  | { kind: "valid"; enabled: boolean }
+  | { kind: "invalid"; error: string };
+
+const AgentToolParameters = Type.Object(
+  {
+    extraContext: Type.Optional(
+      Type.String({
+        description:
+          "Optional instructions or emphasis for the super-summary and continuation decision.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 const DecisionParameters = Type.Object(
   {
     continuation: Type.Unsafe<ContinuationAction>({
@@ -64,6 +90,45 @@ const DecisionParameters = Type.Object(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readAgentToolConfig(path: string): ConfigReadResult {
+  let content: string;
+  try {
+    content = readFileSync(path, "utf8");
+  } catch (error) {
+    if (
+      isRecord(error) &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return { kind: "absent" };
+    }
+    return {
+      kind: "invalid",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (!isRecord(parsed)) {
+      return { kind: "invalid", error: "the root value must be an object" };
+    }
+    if (!("agentToolEnabled" in parsed)) return { kind: "absent" };
+    if (typeof parsed.agentToolEnabled !== "boolean") {
+      return {
+        kind: "invalid",
+        error: "agentToolEnabled must be true or false",
+      };
+    }
+    return { kind: "valid", enabled: parsed.agentToolEnabled };
+  } catch (error) {
+    return {
+      kind: "invalid",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function notify(
@@ -242,15 +307,88 @@ function summaryFromDetails(details: unknown): string | undefined {
 
 export default function supercompactExtension(pi: ExtensionAPI): void {
   let request: SupercompactRequest | undefined;
+  let agentToolMode: AgentToolMode = "disabled";
   let decisionToolRegistered = false;
   const activeDecisionToolCallIds = new Set<string>();
 
-  const deactivateDecisionTool = (): void => {
+  const setToolActive = (toolName: string, active: boolean): boolean => {
     const activeTools = pi.getActiveTools();
-    if (!activeTools.includes(DECISION_TOOL_NAME)) return;
+    const isActive = activeTools.includes(toolName);
+    if (isActive === active) return true;
+
     pi.setActiveTools(
-      activeTools.filter((toolName) => toolName !== DECISION_TOOL_NAME),
+      active
+        ? [...activeTools, toolName]
+        : activeTools.filter((name) => name !== toolName),
     );
+    return pi.getActiveTools().includes(toolName) === active;
+  };
+
+  const updateAgentToolStatus = (ctx: ExtensionContext): void => {
+    if (!ctx.hasUI) return;
+    const status =
+      agentToolMode === "enabled"
+        ? "supercompact: agent enabled"
+        : agentToolMode === "once"
+          ? "supercompact: allowed once"
+          : undefined;
+    ctx.ui.setStatus(STATUS_KEY, status);
+  };
+
+  const applyAgentToolMode = (
+    mode: AgentToolMode,
+    ctx: ExtensionContext,
+  ): boolean => {
+    agentToolMode = mode;
+    const active = mode !== "disabled";
+    if (!setToolActive(AGENT_TOOL_NAME, active)) {
+      agentToolMode = "disabled";
+      setToolActive(AGENT_TOOL_NAME, false);
+      updateAgentToolStatus(ctx);
+      notify(
+        ctx,
+        "Supercompact agent tool is unavailable in this session.",
+        "error",
+      );
+      return false;
+    }
+    updateAgentToolStatus(ctx);
+    return true;
+  };
+
+  const loadConfiguredAgentToolMode = (
+    ctx: ExtensionContext,
+  ): AgentToolMode => {
+    const configs: Array<{ path: string; result: ConfigReadResult }> = [];
+    const globalPath = join(getAgentDir(), CONFIG_FILE_NAME);
+    configs.push({ path: globalPath, result: readAgentToolConfig(globalPath) });
+
+    if (ctx.isProjectTrusted()) {
+      const projectPath = join(ctx.cwd, CONFIG_DIR_NAME, CONFIG_FILE_NAME);
+      configs.push({
+        path: projectPath,
+        result: readAgentToolConfig(projectPath),
+      });
+    }
+
+    let enabled = false;
+    for (const config of configs) {
+      if (config.result.kind === "valid") {
+        enabled = config.result.enabled;
+      } else if (config.result.kind === "invalid") {
+        enabled = false;
+        notify(
+          ctx,
+          `Ignoring invalid supercompact config at ${config.path}: ${config.result.error}`,
+          "warning",
+        );
+      }
+    }
+    return enabled ? "enabled" : "disabled";
+  };
+
+  const deactivateDecisionTool = (): void => {
+    setToolActive(DECISION_TOOL_NAME, false);
   };
 
   const clearTransientState = (ctx?: ExtensionContext): void => {
@@ -259,9 +397,14 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     if (ctx) setWorkingMessage(ctx);
   };
 
+  const settleAgentToolAfterRequest = (ctx: ExtensionContext): void => {
+    applyAgentToolMode(agentToolMode, ctx);
+  };
+
   const fail = (ctx: ExtensionContext, message: string): void => {
     clearTransientState(ctx);
     request = undefined;
+    settleAgentToolAfterRequest(ctx);
     notify(ctx, `Supercompact failed: ${message}`, "error");
   };
 
@@ -329,12 +472,104 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       decisionToolRegistered = true;
     }
 
-    const activeTools = pi.getActiveTools();
-    if (!activeTools.includes(DECISION_TOOL_NAME)) {
-      pi.setActiveTools([...activeTools, DECISION_TOOL_NAME]);
-    }
-    return pi.getActiveTools().includes(DECISION_TOOL_NAME);
+    return setToolActive(DECISION_TOOL_NAME, true);
   };
+
+  const beginSupercompact = (
+    extraContext: string,
+    ctx: ExtensionContext,
+  ): { started: true } | { started: false; reason: string } => {
+    if (request) {
+      return { started: false, reason: "Supercompact is already in progress." };
+    }
+
+    const idle = ctx.isIdle();
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    request = {
+      id,
+      phase: "queued",
+      compactionCompleted: false,
+      attempts: 0,
+      correctionSent: false,
+      currentBatchValid: false,
+    };
+
+    if (!ensureDecisionTool()) {
+      request = undefined;
+      return {
+        started: false,
+        reason:
+          "Supercompact failed: the internal continuation-decision tool is unavailable in this session.",
+      };
+    }
+
+    if (extraContext) {
+      notify(
+        ctx,
+        `${idle ? "Creating super-summary." : "Supercompaction queued; finishing the current tool batch first."}\nExtra instructions: ${extraContext}`,
+      );
+    } else if (!idle) {
+      notify(
+        ctx,
+        "Supercompaction queued; finishing the current tool batch first.",
+      );
+    }
+
+    pi.sendMessage(
+      {
+        customType: SUMMARY_REQUEST_TYPE,
+        content: buildSummaryPrompt(extraContext),
+        display: false,
+        details: { version: 2, requestId: id },
+      },
+      idle ? { triggerTurn: true, deliverAs: "steer" } : { deliverAs: "steer" },
+    );
+    return { started: true };
+  };
+
+  pi.registerTool({
+    name: AGENT_TOOL_NAME,
+    label: "Supercompact",
+    description:
+      "Prepare a full-context working-memory handoff, run native compaction, and resume authorized unfinished work when appropriate. This tool is callable only while the user has authorized agent-triggered supercompaction.",
+    parameters: AgentToolParameters,
+    executionMode: "sequential",
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (request) {
+        throw new Error("Supercompact is already in progress.");
+      }
+      if (agentToolMode === "disabled") {
+        throw new Error(
+          "Agent-triggered supercompaction is not authorized. The user must run /supercompact allow or /supercompact enable.",
+        );
+      }
+
+      const authorization = agentToolMode;
+      const result = beginSupercompact(params.extraContext?.trim() ?? "", ctx);
+      if (!result.started) throw new Error(result.reason);
+
+      if (authorization === "once") {
+        agentToolMode = "disabled";
+        updateAgentToolStatus(ctx);
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              authorization === "once"
+                ? "Supercompaction queued. The one-time authorization has been consumed."
+                : "Supercompaction queued.",
+          },
+        ],
+        details: {
+          authorization,
+          extraContext: params.extraContext?.trim() || undefined,
+        },
+      };
+    },
+  });
 
   const finish = (ctx: ExtensionContext): void => {
     if (
@@ -352,6 +587,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     };
     const content = buildContinuationMessage(parsed);
     request = undefined;
+    settleAgentToolAfterRequest(ctx);
 
     const message = {
       customType: CONTEXT_MESSAGE_TYPE,
@@ -381,11 +617,15 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (_event, ctx) => {
     clearTransientState(ctx);
     request = undefined;
+    applyAgentToolMode(loadConfiguredAgentToolMode(ctx), ctx);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
     clearTransientState(ctx);
     request = undefined;
+    agentToolMode = "disabled";
+    setToolActive(AGENT_TOOL_NAME, false);
+    updateAgentToolStatus(ctx);
   });
 
   pi.on("context", (event) => {
@@ -628,60 +868,135 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     });
   });
 
+  const startFromCommand = (
+    extraContext: string,
+    ctx: ExtensionContext,
+  ): void => {
+    const result = beginSupercompact(extraContext.trim(), ctx);
+    if (result.started) return;
+    notify(
+      ctx,
+      result.reason,
+      result.reason.startsWith("Supercompact failed:") ? "error" : "warning",
+    );
+  };
+
+  const allowAgentToolOnce = (ctx: ExtensionContext): void => {
+    if (request) {
+      notify(
+        ctx,
+        "Cannot grant a new one-time authorization while supercompact is already in progress.",
+        "warning",
+      );
+      return;
+    }
+    if (agentToolMode === "enabled") {
+      notify(ctx, "The supercompact agent tool is already enabled.");
+      return;
+    }
+    if (agentToolMode === "once") {
+      notify(ctx, "One agent supercompaction is already authorized.");
+      return;
+    }
+    if (applyAgentToolMode("once", ctx)) {
+      notify(ctx, "The agent may run supercompact once.");
+    }
+  };
+
+  const enableAgentTool = (ctx: ExtensionContext): void => {
+    if (agentToolMode === "enabled") {
+      notify(ctx, "The supercompact agent tool is already enabled.");
+      return;
+    }
+    if (applyAgentToolMode("enabled", ctx)) {
+      notify(ctx, "The supercompact agent tool is enabled for this session.");
+    }
+  };
+
+  const disableAgentTool = (ctx: ExtensionContext): void => {
+    if (
+      agentToolMode === "disabled" &&
+      !pi.getActiveTools().includes(AGENT_TOOL_NAME)
+    ) {
+      notify(ctx, "The supercompact agent tool is already disabled.");
+      return;
+    }
+    if (applyAgentToolMode("disabled", ctx)) {
+      notify(ctx, "The supercompact agent tool is disabled for this session.");
+    }
+  };
+
+  const showCommandMenu = async (ctx: ExtensionContext): Promise<void> => {
+    if (!ctx.hasUI) {
+      notify(
+        ctx,
+        "The supercompact menu requires TUI or RPC mode. Use /supercompact run, allow, enable, or disable.",
+        "error",
+      );
+      return;
+    }
+
+    const run = "Run supercompact now";
+    const allow = "Allow one agent supercompaction";
+    const enable = "Enable the agent tool for this session";
+    const disable = "Disable the agent tool for this session";
+    const choice = await ctx.ui.select("Supercompact", [
+      run,
+      allow,
+      enable,
+      disable,
+    ]);
+
+    if (choice === run) {
+      const extraContext = await ctx.ui.editor(
+        "Optional extra context for the super-summary",
+        "",
+      );
+      if (extraContext !== undefined) startFromCommand(extraContext, ctx);
+    } else if (choice === allow) {
+      allowAgentToolOnce(ctx);
+    } else if (choice === enable) {
+      enableAgentTool(ctx);
+    } else if (choice === disable) {
+      disableAgentTool(ctx);
+    }
+  };
+
   pi.registerCommand("supercompact", {
-    description:
-      "Summarize full context, compact normally, and resume if needed",
+    description: "Run or configure supercompaction",
+    getArgumentCompletions: (prefix) => {
+      const commands = ["run", "allow", "enable", "disable"];
+      const matches = commands.filter((command) => command.startsWith(prefix));
+      return matches.length === 0
+        ? null
+        : matches.map((command) => ({ value: command, label: command }));
+    },
     handler: async (args, ctx) => {
-      if (request) {
-        notify(ctx, "Supercompact is already in progress.", "warning");
+      const trimmed = args.trim();
+      if (!trimmed) {
+        await showCommandMenu(ctx);
         return;
       }
 
-      const extraContext = args.trim();
-      const idle = ctx.isIdle();
-      const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      request = {
-        id,
-        phase: "queued",
-        compactionCompleted: false,
-        attempts: 0,
-        correctionSent: false,
-        currentBatchValid: false,
-      };
+      const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(trimmed);
+      const action = match?.[1]?.toLowerCase();
+      const remainder = match?.[2]?.trim() ?? "";
 
-      if (!ensureDecisionTool()) {
-        request = undefined;
+      if (action === "run") {
+        startFromCommand(remainder, ctx);
+      } else if (action === "allow" && !remainder) {
+        allowAgentToolOnce(ctx);
+      } else if (action === "enable" && !remainder) {
+        enableAgentTool(ctx);
+      } else if (action === "disable" && !remainder) {
+        disableAgentTool(ctx);
+      } else {
         notify(
           ctx,
-          "Supercompact failed: the internal continuation-decision tool is unavailable in this session.",
+          "Usage: /supercompact [run [extra context] | allow | enable | disable]",
           "error",
         );
-        return;
       }
-
-      if (extraContext) {
-        notify(
-          ctx,
-          `${idle ? "Creating super-summary." : "Supercompaction queued; finishing the current tool batch first."}\nExtra instructions: ${extraContext}`,
-        );
-      } else if (!idle) {
-        notify(
-          ctx,
-          "Supercompaction queued; finishing the current tool batch first.",
-        );
-      }
-
-      pi.sendMessage(
-        {
-          customType: SUMMARY_REQUEST_TYPE,
-          content: buildSummaryPrompt(extraContext),
-          display: false,
-          details: { version: 2, requestId: id },
-        },
-        idle
-          ? { triggerTurn: true, deliverAs: "steer" }
-          : { deliverAs: "steer" },
-      );
     },
   });
 }
