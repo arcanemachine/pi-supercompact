@@ -174,6 +174,9 @@ describe("summary helpers", () => {
     expect(prompt).toContain("stop after compaction");
     expect(prompt).toContain(DECISION_TOOL_NAME);
     expect(prompt).toContain("ordinary Markdown with no wrapper");
+    expect(prompt).toContain("non-obvious constraints");
+    expect(prompt).toContain("source-of-truth or responsibility decisions");
+    expect(prompt).toContain("do not infer new ones");
     expect(prompt.indexOf("- Files by work horizon")).toBeLessThan(
       prompt.indexOf("- Next action"),
     );
@@ -192,6 +195,9 @@ describe("summary helpers", () => {
 
     expect(continuing).toContain(
       "Continue the previously authorized incomplete work now",
+    );
+    expect(continuing).toContain(
+      "not as permission to broaden scope, move responsibilities, or duplicate an existing source of truth",
     );
     expect(continuing.endsWith("Context")).toBe(true);
     expect(stopping).toContain("wait for the user's next instruction");

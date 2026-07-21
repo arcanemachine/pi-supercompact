@@ -165,6 +165,7 @@ export function buildSummaryPrompt(extraContext: string): string {
     "Separate durable facts and verified results from mutable observations, unverified information, and future instructions.",
     "Mutable observations include repository state, installed software, executor availability, external services, and other facts that may change. Include them only when they affect continuation, state when they were observed when useful, and require revalidation only when the next action depends on them.",
     "When direction changed during the conversation, state the current direction. Mention an older direction only when doing so prevents incorrect continuation, and clearly state that it no longer applies.",
+    "Preserve non-obvious constraints that materially affect how unfinished work must be performed, including explicit prohibitions, source-of-truth or responsibility decisions, and the rationale that makes them actionable. Include only constraints established in the conversation; do not infer new ones.",
     "Organize files under only the useful work-horizon tiers: Needed now, Needed for confirmed upcoming work, and Durable references. Omit empty tiers. For each file, give its exact path and a short reason it matters. Do not report historical read status, reproduce a mechanical file ledger, or imply that every listed file must be read immediately. Keep the section focused and explicitly non-exhaustive.",
     "End with a Next action section naming one immediate action, its owner when known, and any approval or input required before it can begin. If no work is authorized, the next action is to wait for the user. Do not place any content after this section.",
     "Use only known facts. Clearly qualify reported or unverified information. Prefer compact headings, bullets, and concrete paths. Refer to the user in the third person.",
@@ -190,7 +191,7 @@ export function buildSummaryPrompt(extraContext: string): string {
 export function buildContinuationMessage(parsed: ParsedSuperSummary): string {
   const directive =
     parsed.action === "continue"
-      ? "Continue the previously authorized incomplete work now. Use the summary as authoritative continuation context, do not repeat completed work, and do not merely acknowledge this message."
+      ? "Continue the previously authorized incomplete work now. Use the summary as authoritative continuation context, do not repeat completed work, and do not merely acknowledge this message. Treat next actions as objectives subject to every recorded constraint, not as permission to broaden scope, move responsibilities, or duplicate an existing source of truth."
       : "Do not automatically continue prior work. Preserve this summary as context and wait for the user's next instruction.";
 
   return [

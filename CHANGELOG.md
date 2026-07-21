@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Preserve established non-obvious constraints and source-of-truth decisions across continuation.
+- Keep resumed next actions subordinate to recorded scope and responsibility boundaries.
+
 ## 0.1.0 - 2026-07-19
 
 - Add `/supercompact [extra context]`.

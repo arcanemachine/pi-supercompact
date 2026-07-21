@@ -77,7 +77,7 @@ The prompt treats the newest super-summary as the canonical working-memory hando
 
 Files are grouped only when useful under `Needed now`, `Needed for confirmed upcoming work`, and `Durable references`. Each entry gives an exact path and why it matters. The summary does not report historical read status or reproduce a mechanical path ledger, and file references do not instruct the resumed agent to read everything immediately.
 
-When direction changed during the conversation, the summary records the current direction and mentions older direction only when needed to prevent incorrect continuation. Commit hashes, blob hashes, forensic provenance identifiers, and diary-style closed history are omitted.
+When direction changed during the conversation, the summary records the current direction and mentions older direction only when needed to prevent incorrect continuation. It also preserves established non-obvious constraints that affect unfinished work, including explicit prohibitions and source-of-truth or responsibility decisions, without inventing new constraints. Commit hashes, blob hashes, forensic provenance identifiers, and diary-style closed history are omitted.
 
 ### Continuation behavior
 
@@ -86,7 +86,7 @@ The summarization turn makes a conservative continuation decision and defaults t
 - `continue` only when the user explicitly requests further work on an identifiable authorized task, or the assistant was actively executing one immediately before supercompaction and has a concrete next action that needs no user input.
 - `stop` when work is complete, the assistant delivered a final result, user input or approval is needed, or remaining possibilities are optional, speculative, or unauthorized.
 
-Summary emphasis in extra context does not imply continuation. The model is instructed not to invent or broaden work. A `continue` result triggers one normal agent turn after compaction; a `stop` result restores the summary without triggering a turn.
+Summary emphasis in extra context does not imply continuation. The model is instructed not to invent or broaden work. On continuation, next actions remain subject to every recorded constraint and do not authorize moving responsibilities or duplicating an existing source of truth. A `continue` result triggers one normal agent turn after compaction; a `stop` result restores the summary without triggering a turn.
 
 Only the newest hidden super-summary is exposed to later model turns. The visible Markdown remains in the transcript, while duplicate summary text and completed internal decision-tool artifacts are filtered from provider context.
 
