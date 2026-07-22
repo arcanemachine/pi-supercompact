@@ -210,6 +210,44 @@ This removes extension-caused mid-session schema invalidation. It does not guara
 
 The README must state this distinction and must not promise that every provider request will hit cache.
 
+## Concise confirmation presentation
+
+Keep the final confirmation dialog scannable. The dialog is a compact preview, not the canonical record.
+
+Display these blocks when applicable:
+
+1. Post-compaction behavior
+2. Next action
+3. Preparation context
+4. Additional summary context
+5. The statement that confirmation begins the canonical summary and native compaction
+
+Separate every displayed block with one blank line. Omit absent optional blocks without leaving duplicate blank lines.
+
+The behavior label remains complete. Limit each freeform value (`nextAction`, preparation context, and additional summary context) to the first 10 whitespace-delimited words for display:
+
+- trim leading and trailing whitespace;
+- collapse internal whitespace and line breaks to single spaces;
+- preserve the complete value when it contains 10 words or fewer;
+- when it contains more than 10 words, display the first 10 followed immediately by a single Unicode ellipsis (`…`);
+- do not add an ellipsis to an untruncated value.
+
+Example:
+
+```text
+Post-compaction behavior: continue authorized work
+
+Next action: Begin Task 4: write final user documentation and run focused validation…
+
+Preparation context: then continue with the remaining items
+
+Additional summary context: Tasks 1-3 are complete and verified; continue with final documentation…
+
+Confirming will begin the canonical super-summary and native compaction immediately.
+```
+
+Truncation is presentation-only. Preserve the complete next action and both context values in confirmation state, the summary prompt, continuation metadata, and restored canonical context. Add a pure display-preview helper so UI truncation cannot accidentally mutate durable workflow data.
+
 ## Evergreen prompt content
 
 Treat every permanent tool description, hidden preparation prompt, canonical-summary prompt, continuation message, error, and notification as standalone product language.
@@ -251,9 +289,11 @@ Add focused prompt-contract tests that reject skill names, private-workflow refe
 7. Replace schema reconciliation call sites with status-only updates and state cleanup.
 8. Add state-specific public authorization, busy, confirmation, headless, revocation, and failure messages.
 9. Add state-specific internal decision-tool phase messages.
-10. Rewrite permanent prompt and tool text according to the evergreen prompt-content requirements.
-11. Generalize canonical handoff resource guidance without losing exact actionable references.
-12. Preserve preparation, final confirmation, summary generation, continuation constraints, filtering, retry bounds, compaction, and restoration behavior.
+10. Add a pure 10-word display-preview helper and render confirmation blocks with blank-line separation.
+11. Keep full confirmation values in summary and continuation state; truncate only dialog presentation.
+12. Rewrite permanent prompt and tool text according to the evergreen prompt-content requirements.
+13. Generalize canonical handoff resource guidance without losing exact actionable references.
+14. Preserve preparation, final confirmation, summary generation, continuation constraints, filtering, retry bounds, compaction, and restoration behavior.
 
 ### `tests/index.test.ts`
 
@@ -282,7 +322,10 @@ Add or revise tests for:
 19. `/allow` and `/forbid` report permission plus host-level unavailability when the public tool is excluded.
 20. Preparation and summary prompts contain no skill names, private-workflow references, personal names, migration language, or unconditional repository assumptions.
 21. Prompt tests preserve focused context refresh, scoped staleness correction, authorized completion, blockers, conditional verification/persistence, continuation choice, and exact-next-action guidance.
-22. Existing preparation, confirmation, continuation, filtering, auto-compaction, bounded retry, synchronous failure, and restoration tests continue to pass.
+22. Confirmation previews preserve values of 10 words or fewer and truncate longer values to exactly 10 words plus one Unicode ellipsis.
+23. Confirmation preview tests cover whitespace normalization, multiline input, absent optional contexts, and one blank line between every displayed block.
+24. Full next-action and context values remain unchanged in the canonical summary prompt and restored workflow metadata after their dialog previews are truncated.
+25. Existing preparation, confirmation, continuation, filtering, auto-compaction, bounded retry, synchronous failure, and restoration tests continue to pass.
 
 ### `README.md`
 
@@ -295,6 +338,8 @@ Update:
 - stable public and internal schemas;
 - cache expectations and remaining provider-dependent miss causes;
 - host-level explicit tool exclusion behavior;
+- concise 10-word confirmation previews with blank-line-separated blocks;
+- the distinction between compact UI previews and lossless canonical context;
 - self-contained, universal refresh-and-close behavior without references to external skills or private workflows.
 
 Final documentation must describe only the resulting product behavior. It must not retain superseded terminology, migration narration, or references to the design process.
@@ -340,14 +385,16 @@ Use an isolated Pi process with only this extension explicitly loaded. Verify:
 3. `/run` starts preparation without changing the active tool vector.
 4. `/allow` and `/forbid` change permission/status without changing the active tool vector.
 5. Authorized execution still opens final confirmation.
-6. Decline, cancellation, and revocation give distinct no-retry guidance.
-7. Accepted confirmation completes summary and native compaction.
-8. `/force` works while public requests are forbidden.
-9. The internal tool rejects an out-of-workflow call and works during the canonical summary turn.
-10. The active tool vector is unchanged before preparation, during summary, and after settlement.
-11. On a session with a reusable long prefix, `/run` and summary-phase entry produce no extension-caused schema change. Record cache observations as provider-dependent evidence, not a guaranteed assertion.
-12. Confirm no verification process modified project files.
-13. Check for attached tmux clients before cleaning up every verification session.
+6. Long next-action and context values render as 10-word previews with ellipses and blank lines between blocks.
+7. The canonical summary still receives every untruncated value shown as a shortened preview.
+8. Decline, cancellation, and revocation give distinct no-retry guidance.
+9. Accepted confirmation completes summary and native compaction.
+10. `/force` works while public requests are forbidden.
+11. The internal tool rejects an out-of-workflow call and works during the canonical summary turn.
+12. The active tool vector is unchanged before preparation, during summary, and after settlement.
+13. On a session with a reusable long prefix, `/run` and summary-phase entry produce no extension-caused schema change. Record cache observations as provider-dependent evidence, not a guaranteed assertion.
+14. Confirm no verification process modified project files.
+15. Check for attached tmux clients before cleaning up every verification session.
 
 ## Completion and deletion criteria
 
@@ -359,11 +406,12 @@ Delete this plan only after all of the following are true:
 4. State-specific agent guidance is implemented and tested.
 5. Configuration uses `agentRequestsAllowed`; missing, unrecognized, and invalid permission fails closed.
 6. Preparation, confirmation, continuation, filtering, retry, cleanup, and compaction regressions pass.
-7. Every permanent prompt and tool description is self-contained, evergreen, broadly applicable, and free of skill or private-workflow references.
-8. README and changelog describe only the final behavior without stale dynamic-schema or migration language.
-9. Package and workspace validation pass.
-10. Live Pi verification passes, including stable active tools and an accepted compaction workflow.
-11. A final review finds no unresolved item, unsupported assumption, or unrelated modification.
+7. Confirmation displays only 10-word freeform previews with blank-line-separated blocks while canonical workflow data remains lossless.
+8. Every permanent prompt and tool description is self-contained, evergreen, broadly applicable, and free of skill or private-workflow references.
+9. README and changelog describe only the final behavior without stale dynamic-schema or migration language.
+10. Package and workspace validation pass.
+11. Live Pi verification passes, including stable active tools and an accepted compaction workflow.
+12. A final review finds no unresolved item, unsupported assumption, or unrelated modification.
 
 Then delete `PLAN.md`, commit the child package with a Conventional Commit, and commit only the updated `packages/pi-supercompact` pointer in the superproject. Do not push or publish.
 
