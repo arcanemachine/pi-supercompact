@@ -2,12 +2,15 @@
 
 ## Unreleased
 
-- Add an agent-callable `supercompact` tool with one-shot and session authorization gates.
-- Add `/supercompact` menu and explicit `run`, `allow`, `enable`, and `disable` subcommands.
-- Add global and trusted-project configuration for the default agent-tool state.
-- Defer one-shot tool removal until the workflow settles to reduce prompt-cache churn.
+- Change `/supercompact run` into a focused pre-compaction preparation and wrap workflow.
+- Add `/supercompact force` for immediate explicitly authorized supercompaction.
+- Change `/supercompact allow` into a live-session policy override and add `/supercompact forbid`; remove the unreleased `enable` and `disable` commands.
+- Keep allow/forbid overrides in memory without rewriting global or trusted-project configuration.
+- Require enforceable TUI or RPC confirmation for every agent-initiated compaction and fail closed without confirmation UI.
+- Add synchronous confirmation locking, post-dialog authorization checks, cancellation handling, and concurrent-request safeguards.
+- Preserve user-confirmed continuation intent, exact next actions, and conservative downgrades across compaction.
+- Add preparation-message filtering and cache-conscious public-tool reconciliation through workflow settlement.
 - Preserve established non-obvious constraints and source-of-truth decisions across continuation.
-- Keep resumed next actions subordinate to recorded scope and responsibility boundaries.
 
 ## 0.1.0 - 2026-07-19
 

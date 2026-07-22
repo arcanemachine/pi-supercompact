@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
+const PREPARATION_REQUEST_TYPE = "pi-supercompact:preparation-request";
 const SUMMARY_REQUEST_TYPE = "pi-supercompact:summary-request";
 const CONTEXT_MESSAGE_TYPE = "pi-supercompact:context";
 const DECISION_TOOL_NAME = "record_supercompact_decision";
@@ -18,12 +19,22 @@ const STATUS_KEY = "pi-supercompact";
 const LEGACY_SUMMARY_PLACEHOLDER =
   "Super-summary prepared; compacting context.";
 const MAX_SUMMARY_ATTEMPTS = 3;
+const USAGE =
+  "Usage: /supercompact [run [extra context] | force [extra context] | allow | forbid]";
 
 export type ContinuationAction = "continue" | "stop";
 
 export interface ParsedSuperSummary {
   action: ContinuationAction;
   summary: string;
+  preparation?: ConfirmedPreparationContext;
+}
+
+export interface ConfirmedPreparationContext {
+  expectedContinuation: ContinuationAction;
+  nextAction: string;
+  runExtraContext?: string;
+  agentExtraContext?: string;
 }
 
 type RequestPhase =
@@ -32,6 +43,15 @@ type RequestPhase =
   | "summary-ready"
   | "compacting";
 
+type AgentPolicy = "allowed" | "forbidden";
+
+interface PreparationGrant {
+  id: string;
+  extraContext: string;
+  consumed: boolean;
+  revoked: boolean;
+}
+
 interface SupercompactRequest {
   id: string;
   phase: RequestPhase;
@@ -39,6 +59,7 @@ interface SupercompactRequest {
   attempts: number;
   correctionSent: boolean;
   currentBatchValid: boolean;
+  preparation?: ConfirmedPreparationContext;
   action?: ContinuationAction;
   summary?: string;
   error?: string;
@@ -46,6 +67,10 @@ interface SupercompactRequest {
 
 interface SummaryRequestDetails {
   requestId?: unknown;
+}
+
+interface PreparationRequestDetails {
+  preparationId?: unknown;
 }
 
 interface RestoredContextDetails {
@@ -57,8 +82,6 @@ interface DecisionToolDetails {
   continuation: ContinuationAction;
 }
 
-type AgentToolMode = "disabled" | "once" | "enabled";
-
 type ConfigReadResult =
   | { kind: "absent" }
   | { kind: "valid"; enabled: boolean }
@@ -66,10 +89,21 @@ type ConfigReadResult =
 
 const AgentToolParameters = Type.Object(
   {
+    continuation: Type.Unsafe<ContinuationAction>({
+      type: "string",
+      enum: ["continue", "stop"],
+      description:
+        "Whether authorized incomplete work should continue after compaction or the agent should wait for the user.",
+    }),
+    nextAction: Type.String({
+      minLength: 1,
+      description:
+        "One concrete immediate action after compaction, or an explicit statement that the agent will wait for the user.",
+    }),
     extraContext: Type.Optional(
       Type.String({
         description:
-          "Optional instructions or emphasis for the super-summary and continuation decision.",
+          "Optional additional emphasis for the canonical super-summary.",
       }),
     ),
   },
@@ -199,15 +233,76 @@ function staticComponent(lines: string[]) {
   };
 }
 
-export function buildSummaryPrompt(extraContext: string): string {
+export function buildPreparationPrompt(extraContext: string): string {
   const emphasis = extraContext.trim()
     ? [
-        "The user supplied the following extra context. It has highest priority when shaping the summary and continuation decision. Treat it as a continuation instruction only when it explicitly requests further work, continuation, resumption, stopping, or waiting:",
-        "<extra-context>",
+        "The user supplied this preparation context. Give it high priority within the existing authorization boundaries:",
+        "<preparation-context>",
         extraContext.trim(),
-        "</extra-context>",
+        "</preparation-context>",
       ].join("\n")
-    : "The user supplied no extra context.";
+    : "The user supplied no extra preparation context.";
+
+  return [
+    "Perform a focused pre-compaction wrap for the active work. Do not compact immediately.",
+    "Use the current conversation and actual scoped repository state rather than relying on memory.",
+    "Do not broaden the task, invent work, or turn this into a repository-wide audit or ceremonial report.",
+    "",
+    emphasis,
+    "",
+    "Freshen the active context:",
+    "- Re-read the relevant plan, user-facing documentation, agent instructions, and directly referenced companion documents.",
+    "- Compare them with current command names, implementation paths, repository state, and focused verification results.",
+    "- Fix obvious staleness introduced by the active work, while keeping durable documentation evergreen and free of transient hashes, branch counts, push status, or diary narration.",
+    "",
+    "Wrap the active boundary:",
+    "- Review the current objective, explicit authorization boundaries, and established non-obvious constraints.",
+    "- Identify incomplete requested work, unfinished active items, required validation or commits, blockers, unanswered questions, missing approvals, credentials, and decisions.",
+    "- Complete only work that is already authorized, safe to complete, and needs no new user input. Run required focused verification and observe repository commit rules.",
+    "- Resolve issues you are authorized to resolve. Surface material blockers or decisions prominently; if user input is required, ask and wait without requesting supercompaction.",
+    "- Distinguish real remaining work from optional improvements or speculative follow-ups.",
+    "- Establish whether work should continue or stop after compaction. If continuing, identify one exact immediate next action that remains authorized and needs no additional input.",
+    "- Re-read anything you changed and make a final accuracy pass.",
+    "",
+    `When the boundary is clean and unambiguous, call ${AGENT_TOOL_NAME} with the expected continuation, exact next action, and any additional summary emphasis. The user will receive a final confirmation dialog before native compaction begins.`,
+    `Do not call ${AGENT_TOOL_NAME} merely because it is available; call it only after these checks are complete.`,
+  ].join("\n");
+}
+
+export function buildSummaryPrompt(
+  extraContext: string,
+  preparation?: ConfirmedPreparationContext,
+): string {
+  const emphasis = preparation
+    ? [
+        "The user confirmed the following preparation outcome immediately before this summary request:",
+        "<confirmed-preparation>",
+        `Expected continuation: ${preparation.expectedContinuation}`,
+        `Exact next action: ${preparation.nextAction}`,
+        ...(preparation.runExtraContext
+          ? [
+              `Original /supercompact run context: ${preparation.runExtraContext}`,
+            ]
+          : []),
+        ...(preparation.agentExtraContext
+          ? [
+              `Agent-supplied summary emphasis confirmed by the user: ${preparation.agentExtraContext}`,
+            ]
+          : []),
+        "</confirmed-preparation>",
+        preparation.expectedContinuation === "stop"
+          ? `The confirmed stop is a hard constraint. The ${DECISION_TOOL_NAME} continuation must be stop.`
+          : "The confirmed continue authorizes continuation but does not force it. Choose stop if missing input, a blocker, completed work, or uncertainty makes continuation unsafe.",
+        "Preserve the confirmed intent, exact next action, and any conservative downgrade to stop in the canonical handoff.",
+      ].join("\n")
+    : extraContext.trim()
+      ? [
+          "The user supplied the following extra context. It has highest priority when shaping the summary and continuation decision. Treat it as a continuation instruction only when it explicitly requests further work, continuation, resumption, stopping, or waiting:",
+          "<extra-context>",
+          extraContext.trim(),
+          "</extra-context>",
+        ].join("\n")
+      : "The user supplied no extra context.";
 
   return [
     "Prepare the canonical working-memory handoff for this session before context compaction.",
@@ -258,6 +353,22 @@ export function buildContinuationMessage(parsed: ParsedSuperSummary): string {
     parsed.action === "continue"
       ? "Continue the previously authorized incomplete work now. Use the summary as authoritative continuation context, do not repeat completed work, and do not merely acknowledge this message. Treat next actions as objectives subject to every recorded constraint, not as permission to broaden scope, move responsibilities, or duplicate an existing source of truth."
       : "Do not automatically continue prior work. Preserve this summary as context and wait for the user's next instruction.";
+  const preparation = parsed.preparation
+    ? [
+        "## Confirmed preparation outcome",
+        "",
+        `- User-confirmed expectation: ${parsed.preparation.expectedContinuation}`,
+        `- Validated continuation: ${parsed.action}`,
+        `- Proposed next action: ${parsed.preparation.nextAction}`,
+        ...(parsed.preparation.expectedContinuation === "continue" &&
+        parsed.action === "stop"
+          ? [
+              "- Safety outcome: continuation was conservatively downgraded to stop; wait for user direction rather than executing the proposed next action.",
+            ]
+          : []),
+        "",
+      ]
+    : [];
 
   return [
     "# Supercompaction context",
@@ -266,6 +377,7 @@ export function buildContinuationMessage(parsed: ParsedSuperSummary): string {
     "",
     directive,
     "",
+    ...preparation,
     "## File-reference guidance",
     "",
     "File paths in the summary are organized by when they are expected to matter. Treat them as focused references, not as proof of current contents or instructions to read every file. Read exact contents only when the active task requires them.",
@@ -277,9 +389,21 @@ export function buildContinuationMessage(parsed: ParsedSuperSummary): string {
 type ContextMessage = ContextEvent["messages"][number];
 type CustomContextMessage = Extract<ContextMessage, { role: "custom" }>;
 
+function isPreparationRequestMessage(
+  message: ContextMessage,
+): message is CustomContextMessage & {
+  customType: typeof PREPARATION_REQUEST_TYPE;
+} {
+  return (
+    message.role === "custom" && message.customType === PREPARATION_REQUEST_TYPE
+  );
+}
+
 function isSummaryRequestMessage(
   message: ContextMessage,
-): message is CustomContextMessage {
+): message is CustomContextMessage & {
+  customType: typeof SUMMARY_REQUEST_TYPE;
+} {
   return (
     message.role === "custom" && message.customType === SUMMARY_REQUEST_TYPE
   );
@@ -287,7 +411,9 @@ function isSummaryRequestMessage(
 
 function isRestoredContextMessage(
   message: ContextMessage,
-): message is CustomContextMessage {
+): message is CustomContextMessage & {
+  customType: typeof CONTEXT_MESSAGE_TYPE;
+} {
   return (
     message.role === "custom" && message.customType === CONTEXT_MESSAGE_TYPE
   );
@@ -299,17 +425,50 @@ function requestIdFromDetails(details: unknown): string | undefined {
   return typeof requestId === "string" ? requestId : undefined;
 }
 
+function preparationIdFromDetails(details: unknown): string | undefined {
+  if (!isRecord(details)) return undefined;
+  const preparationId = (details as PreparationRequestDetails).preparationId;
+  return typeof preparationId === "string" ? preparationId : undefined;
+}
+
 function summaryFromDetails(details: unknown): string | undefined {
   if (!isRecord(details)) return undefined;
   const summary = (details as RestoredContextDetails).summary;
   return typeof summary === "string" ? summary : undefined;
 }
 
+function createId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function confirmationText(preparation: ConfirmedPreparationContext): string {
+  return [
+    `Post-compaction behavior: ${preparation.expectedContinuation === "continue" ? "continue authorized work" : "stop and wait"}`,
+    `Next action: ${preparation.nextAction}`,
+    ...(preparation.runExtraContext
+      ? [`Preparation context: ${preparation.runExtraContext}`]
+      : []),
+    ...(preparation.agentExtraContext
+      ? [`Additional summary context: ${preparation.agentExtraContext}`]
+      : []),
+    "",
+    "Confirming will begin the canonical super-summary and native compaction immediately.",
+  ].join("\n");
+}
+
 export default function supercompactExtension(pi: ExtensionAPI): void {
   let request: SupercompactRequest | undefined;
-  let agentToolMode: AgentToolMode = "disabled";
+  let configuredPolicy: AgentPolicy = "forbidden";
+  let sessionPolicyOverride: AgentPolicy | undefined;
+  let preparationGrant: PreparationGrant | undefined;
+  let confirmationId: string | undefined;
+  let confirmationAbortController: AbortController | undefined;
+  let confirmationRevoked = false;
   let decisionToolRegistered = false;
   const activeDecisionToolCallIds = new Set<string>();
+
+  const effectivePolicy = (): AgentPolicy =>
+    sessionPolicyOverride ?? configuredPolicy;
 
   const setToolActive = (toolName: string, active: boolean): boolean => {
     const activeTools = pi.getActiveTools();
@@ -327,38 +486,43 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   const updateAgentToolStatus = (ctx: ExtensionContext): void => {
     if (!ctx.hasUI) return;
     const status =
-      agentToolMode === "enabled"
-        ? "supercompact: agent enabled"
-        : agentToolMode === "once"
-          ? "supercompact: allowed once"
-          : undefined;
+      confirmationId && !confirmationRevoked
+        ? "supercompact: awaiting confirmation"
+        : preparationGrant && !preparationGrant.consumed
+          ? "supercompact: preparing"
+          : effectivePolicy() === "allowed"
+            ? "supercompact: allowed"
+            : undefined;
     ctx.ui.setStatus(STATUS_KEY, status);
   };
 
-  const applyAgentToolMode = (
-    mode: AgentToolMode,
+  const shouldAgentToolBeActive = (): boolean =>
+    effectivePolicy() === "allowed" ||
+    Boolean(preparationGrant && !preparationGrant.revoked);
+
+  const reconcileAgentTool = (
     ctx: ExtensionContext,
+    reportFailure = true,
   ): boolean => {
-    agentToolMode = mode;
-    const active = mode !== "disabled";
-    if (!setToolActive(AGENT_TOOL_NAME, active)) {
-      agentToolMode = "disabled";
-      setToolActive(AGENT_TOOL_NAME, false);
+    const shouldBeActive = shouldAgentToolBeActive();
+    if (setToolActive(AGENT_TOOL_NAME, shouldBeActive)) {
       updateAgentToolStatus(ctx);
+      return true;
+    }
+
+    setToolActive(AGENT_TOOL_NAME, false);
+    if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
+    if (reportFailure) {
       notify(
         ctx,
         "Supercompact agent tool is unavailable in this session.",
         "error",
       );
-      return false;
     }
-    updateAgentToolStatus(ctx);
-    return true;
+    return false;
   };
 
-  const loadConfiguredAgentToolMode = (
-    ctx: ExtensionContext,
-  ): AgentToolMode => {
+  const loadConfiguredPolicy = (ctx: ExtensionContext): AgentPolicy => {
     const configs: Array<{ path: string; result: ConfigReadResult }> = [];
     const globalPath = join(getAgentDir(), CONFIG_FILE_NAME);
     configs.push({ path: globalPath, result: readAgentToolConfig(globalPath) });
@@ -384,27 +548,32 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         );
       }
     }
-    return enabled ? "enabled" : "disabled";
+    return enabled ? "allowed" : "forbidden";
   };
 
   const deactivateDecisionTool = (): void => {
     setToolActive(DECISION_TOOL_NAME, false);
   };
 
-  const clearTransientState = (ctx?: ExtensionContext): void => {
+  const clearDecisionState = (ctx?: ExtensionContext): void => {
     deactivateDecisionTool();
     activeDecisionToolCallIds.clear();
     if (ctx) setWorkingMessage(ctx);
   };
 
-  const settleAgentToolAfterRequest = (ctx: ExtensionContext): void => {
-    applyAgentToolMode(agentToolMode, ctx);
+  const clearConsumedPreparation = (): void => {
+    if (preparationGrant?.consumed) preparationGrant = undefined;
   };
 
   const fail = (ctx: ExtensionContext, message: string): void => {
-    clearTransientState(ctx);
+    clearDecisionState(ctx);
     request = undefined;
-    settleAgentToolAfterRequest(ctx);
+    confirmationAbortController?.abort();
+    confirmationId = undefined;
+    confirmationAbortController = undefined;
+    confirmationRevoked = false;
+    clearConsumedPreparation();
+    reconcileAgentTool(ctx);
     notify(ctx, `Supercompact failed: ${message}`, "error");
   };
 
@@ -430,11 +599,19 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
               "Write the requested non-empty Markdown handoff before recording its continuation decision.",
             );
           }
+          if (
+            request.preparation?.expectedContinuation === "stop" &&
+            params.continuation === "continue"
+          ) {
+            throw new Error(
+              "The user-confirmed stop is a hard constraint. Record continuation as stop.",
+            );
+          }
 
           request.action = params.continuation;
           request.phase = "summary-ready";
           request.error = undefined;
-          clearTransientState(ctx);
+          clearDecisionState(ctx);
           notify(
             ctx,
             params.continuation === "continue"
@@ -477,6 +654,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
 
   const beginSupercompact = (
     extraContext: string,
+    preparation: ConfirmedPreparationContext | undefined,
     ctx: ExtensionContext,
   ): { started: true } | { started: false; reason: string } => {
     if (request) {
@@ -484,7 +662,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     }
 
     const idle = ctx.isIdle();
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const id = createId();
     request = {
       id,
       phase: "queued",
@@ -492,6 +670,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       attempts: 0,
       correctionSent: false,
       currentBatchValid: false,
+      preparation,
     };
 
     if (!ensureDecisionTool()) {
@@ -503,6 +682,9 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       };
     }
 
+    if (preparationGrant && preparation) preparationGrant.consumed = true;
+    updateAgentToolStatus(ctx);
+
     if (extraContext) {
       notify(
         ctx,
@@ -513,63 +695,34 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         ctx,
         "Supercompaction queued; finishing the current tool batch first.",
       );
+    } else {
+      notify(ctx, "Creating super-summary.");
     }
 
-    pi.sendMessage(
-      {
-        customType: SUMMARY_REQUEST_TYPE,
-        content: buildSummaryPrompt(extraContext),
-        display: false,
-        details: { version: 2, requestId: id },
-      },
-      idle ? { triggerTurn: true, deliverAs: "steer" } : { deliverAs: "steer" },
-    );
-    return { started: true };
-  };
-
-  pi.registerTool({
-    name: AGENT_TOOL_NAME,
-    label: "Supercompact",
-    description:
-      "Prepare a full-context working-memory handoff, run native compaction, and resume authorized unfinished work when appropriate. This tool is callable only while the user has authorized agent-triggered supercompaction.",
-    parameters: AgentToolParameters,
-    executionMode: "sequential",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (request) {
-        throw new Error("Supercompact is already in progress.");
-      }
-      if (agentToolMode === "disabled") {
-        throw new Error(
-          "Agent-triggered supercompaction is not authorized. The user must run /supercompact allow or /supercompact enable.",
-        );
-      }
-
-      const authorization = agentToolMode;
-      const result = beginSupercompact(params.extraContext?.trim() ?? "", ctx);
-      if (!result.started) throw new Error(result.reason);
-
-      if (authorization === "once") {
-        agentToolMode = "disabled";
-        updateAgentToolStatus(ctx);
-      }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              authorization === "once"
-                ? "Supercompaction queued. The one-time authorization has been consumed."
-                : "Supercompaction queued.",
-          },
-        ],
-        details: {
-          authorization,
-          extraContext: params.extraContext?.trim() || undefined,
+    try {
+      pi.sendMessage(
+        {
+          customType: SUMMARY_REQUEST_TYPE,
+          content: buildSummaryPrompt(extraContext, preparation),
+          display: false,
+          details: { version: 3, requestId: id },
         },
+        idle
+          ? { triggerTurn: true, deliverAs: "steer" }
+          : { deliverAs: "steer" },
+      );
+      return { started: true };
+    } catch (error) {
+      clearDecisionState(ctx);
+      request = undefined;
+      clearConsumedPreparation();
+      reconcileAgentTool(ctx);
+      return {
+        started: false,
+        reason: `Supercompact failed: ${error instanceof Error ? error.message : String(error)}`,
       };
-    },
-  });
+    }
+  };
 
   const finish = (ctx: ExtensionContext): void => {
     if (
@@ -584,54 +737,291 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     const parsed: ParsedSuperSummary = {
       action: request.action,
       summary: request.summary,
+      preparation: request.preparation,
     };
     const content = buildContinuationMessage(parsed);
     request = undefined;
-    settleAgentToolAfterRequest(ctx);
+    clearConsumedPreparation();
+    reconcileAgentTool(ctx);
 
     const message = {
       customType: CONTEXT_MESSAGE_TYPE,
       content,
       display: false,
       details: {
-        version: 2,
+        version: 3,
         continuation: parsed.action,
         summary: parsed.summary,
       },
     };
 
-    if (parsed.action === "continue") {
-      pi.sendMessage(message, {
-        triggerTurn: true,
-        deliverAs: "steer",
-      });
-      return;
-    }
+    try {
+      if (parsed.action === "continue") {
+        pi.sendMessage(message, {
+          triggerTurn: true,
+          deliverAs: "steer",
+        });
+        return;
+      }
 
-    pi.sendMessage(
-      message,
-      ctx.isIdle() ? undefined : { deliverAs: "nextTurn" },
-    );
+      pi.sendMessage(
+        message,
+        ctx.isIdle() ? undefined : { deliverAs: "nextTurn" },
+      );
+    } catch (error) {
+      notify(
+        ctx,
+        `Supercompact failed to restore its canonical context: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+    }
   };
 
+  const cancelPendingConfirmation = (): boolean => {
+    if (!confirmationId) return false;
+    confirmationRevoked = true;
+    confirmationAbortController?.abort();
+    return true;
+  };
+
+  pi.registerTool({
+    name: AGENT_TOOL_NAME,
+    label: "Supercompact",
+    description:
+      "Request final user confirmation for supercompaction after completing the focused pre-compaction preparation checks. Before calling: resolve authorized unfinished work, run required focused verification, freshen relevant durable context, ask and wait on blockers or missing input, decide whether work should continue or stop, and identify one exact next action. Do not call merely because this tool is available. Confirmation is required before the canonical super-summary and native compaction begin.",
+    parameters: AgentToolParameters,
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (request) {
+        throw new Error("Supercompact is already in progress.");
+      }
+      if (confirmationId) {
+        throw new Error("Supercompact confirmation is already in progress.");
+      }
+      if (
+        effectivePolicy() !== "allowed" &&
+        (!preparationGrant ||
+          preparationGrant.consumed ||
+          preparationGrant.revoked)
+      ) {
+        throw new Error(
+          "Agent-triggered supercompaction is not authorized. The user must run /supercompact run or /supercompact allow.",
+        );
+      }
+      if (!ctx.hasUI) {
+        throw new Error(
+          "Agent-triggered supercompaction requires confirmation in TUI or RPC mode.",
+        );
+      }
+
+      const nextAction = params.nextAction.trim();
+      if (!nextAction) throw new Error("nextAction must not be empty.");
+      const grantId =
+        preparationGrant &&
+        !preparationGrant.consumed &&
+        !preparationGrant.revoked
+          ? preparationGrant.id
+          : undefined;
+      const preparation: ConfirmedPreparationContext = {
+        expectedContinuation: params.continuation,
+        nextAction,
+        ...(grantId && preparationGrant?.extraContext
+          ? { runExtraContext: preparationGrant.extraContext }
+          : {}),
+        ...(params.extraContext?.trim()
+          ? { agentExtraContext: params.extraContext.trim() }
+          : {}),
+      };
+
+      const currentConfirmationId = createId();
+      const currentConfirmationAbortController = new AbortController();
+      confirmationId = currentConfirmationId;
+      confirmationAbortController = currentConfirmationAbortController;
+      confirmationRevoked = false;
+      updateAgentToolStatus(ctx);
+
+      const dialogSignal = signal
+        ? AbortSignal.any([signal, currentConfirmationAbortController.signal])
+        : currentConfirmationAbortController.signal;
+      let confirmed: boolean;
+      try {
+        confirmed = await ctx.ui.confirm(
+          "Confirm agent-requested supercompaction",
+          confirmationText(preparation),
+          { signal: dialogSignal },
+        );
+      } catch {
+        const revoked =
+          confirmationId === currentConfirmationId && confirmationRevoked;
+        if (confirmationId === currentConfirmationId) {
+          confirmationId = undefined;
+          confirmationAbortController = undefined;
+          confirmationRevoked = false;
+          if (grantId && preparationGrant?.id === grantId) {
+            preparationGrant = undefined;
+          }
+          reconcileAgentTool(ctx);
+          notify(
+            ctx,
+            revoked
+              ? "Supercompaction authorization was revoked."
+              : "Supercompaction confirmation was canceled.",
+            "warning",
+          );
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: revoked
+                ? "Supercompaction authorization was revoked while confirmation was open. Do not retry automatically; wait for user direction."
+                : "Supercompaction confirmation was canceled. Do not retry automatically; wait for user direction.",
+            },
+          ],
+          details: { status: revoked ? "revoked" : "canceled" },
+        };
+      }
+
+      if (confirmationId !== currentConfirmationId) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Supercompaction authorization was revoked while confirmation was open. Do not retry automatically; wait for user direction.",
+            },
+          ],
+          details: { status: "revoked" },
+        };
+      }
+      if (confirmationRevoked) {
+        confirmationId = undefined;
+        confirmationAbortController = undefined;
+        confirmationRevoked = false;
+        reconcileAgentTool(ctx);
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Supercompaction authorization was revoked while confirmation was open. Do not retry automatically; wait for user direction.",
+            },
+          ],
+          details: { status: "revoked" },
+        };
+      }
+
+      confirmationId = undefined;
+      confirmationAbortController = undefined;
+      confirmationRevoked = false;
+      if (!confirmed) {
+        if (grantId && preparationGrant?.id === grantId) {
+          preparationGrant = undefined;
+        }
+        reconcileAgentTool(ctx);
+        notify(ctx, "Agent-requested supercompaction was declined.", "warning");
+        return {
+          content: [
+            {
+              type: "text",
+              text: "The user declined supercompaction. Do not retry automatically; wait for user direction.",
+            },
+          ],
+          details: { status: "declined" },
+        };
+      }
+
+      const stillAuthorized =
+        effectivePolicy() === "allowed" ||
+        Boolean(
+          grantId &&
+          preparationGrant?.id === grantId &&
+          !preparationGrant.consumed &&
+          !preparationGrant.revoked,
+        );
+      if (!stillAuthorized) {
+        reconcileAgentTool(ctx);
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Supercompaction authorization expired before confirmation completed. Do not retry automatically; wait for user direction.",
+            },
+          ],
+          details: { status: "expired" },
+        };
+      }
+
+      const result = beginSupercompact("", preparation, ctx);
+      if (!result.started) {
+        if (grantId && preparationGrant?.id === grantId) {
+          preparationGrant = undefined;
+        }
+        reconcileAgentTool(ctx);
+        throw new Error(result.reason);
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Supercompaction confirmed and queued.",
+          },
+        ],
+        details: {
+          status: "queued",
+          continuation: preparation.expectedContinuation,
+          nextAction: preparation.nextAction,
+        },
+      };
+    },
+  });
+
   pi.on("session_start", (_event, ctx) => {
-    clearTransientState(ctx);
+    const canceledPreparation = Boolean(
+      (preparationGrant && !preparationGrant.consumed) || confirmationId,
+    );
+    clearDecisionState(ctx);
     request = undefined;
-    applyAgentToolMode(loadConfiguredAgentToolMode(ctx), ctx);
+    preparationGrant = undefined;
+    confirmationAbortController?.abort();
+    confirmationId = undefined;
+    confirmationAbortController = undefined;
+    confirmationRevoked = false;
+    sessionPolicyOverride = undefined;
+    configuredPolicy = loadConfiguredPolicy(ctx);
+    reconcileAgentTool(ctx);
+    if (canceledPreparation) {
+      notify(ctx, "Pending pre-compaction preparation was canceled.");
+    }
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
-    clearTransientState(ctx);
+    const canceledPreparation = Boolean(
+      (preparationGrant && !preparationGrant.consumed) || confirmationId,
+    );
+    clearDecisionState(ctx);
     request = undefined;
-    agentToolMode = "disabled";
+    preparationGrant = undefined;
+    confirmationAbortController?.abort();
+    confirmationId = undefined;
+    confirmationAbortController = undefined;
+    confirmationRevoked = false;
+    sessionPolicyOverride = undefined;
+    configuredPolicy = "forbidden";
     setToolActive(AGENT_TOOL_NAME, false);
     updateAgentToolStatus(ctx);
+    if (canceledPreparation) {
+      notify(ctx, "Pending pre-compaction preparation was canceled.");
+    }
   });
 
   pi.on("context", (event) => {
     const activeRequestId =
       request?.phase === "queued" || request?.phase === "awaiting-summary"
         ? request.id
+        : undefined;
+    const activePreparationId =
+      preparationGrant && !preparationGrant.consumed && !request
+        ? preparationGrant.id
         : undefined;
     const preserveActiveDecisionArtifacts =
       request?.phase === "awaiting-summary";
@@ -649,6 +1039,15 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     const messages: ContextMessage[] = [];
 
     event.messages.forEach((message, index) => {
+      if (isPreparationRequestMessage(message)) {
+        if (preparationIdFromDetails(message.details) === activePreparationId) {
+          messages.push(message);
+        } else {
+          changed = true;
+        }
+        return;
+      }
+
       if (isSummaryRequestMessage(message)) {
         if (requestIdFromDetails(message.details) === activeRequestId) {
           messages.push(message);
@@ -755,7 +1154,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     }
 
     request.error = `the continuation decision remained invalid after ${MAX_SUMMARY_ATTEMPTS} attempts`;
-    clearTransientState(ctx);
+    clearDecisionState(ctx);
     ctx.abort();
   });
 
@@ -782,7 +1181,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     request.attempts += 1;
     if (request.attempts > MAX_SUMMARY_ATTEMPTS) {
       request.error = `the summary remained invalid after ${MAX_SUMMARY_ATTEMPTS} attempts`;
-      clearTransientState(ctx);
+      clearDecisionState(ctx);
       ctx.abort();
       return;
     }
@@ -833,15 +1232,19 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       ) {
         request.correctionSent = true;
         request.currentBatchValid = false;
-        pi.sendMessage(
-          {
-            customType: SUMMARY_REQUEST_TYPE,
-            content: `The Markdown super-summary has been captured. Do not repeat it. Call ${DECISION_TOOL_NAME} exactly once now with continuation set to continue or stop. Do not call any other tool or emit additional commentary.`,
-            display: false,
-            details: { version: 2, requestId: request.id, correction: true },
-          },
-          { triggerTurn: true, deliverAs: "steer" },
-        );
+        try {
+          pi.sendMessage(
+            {
+              customType: SUMMARY_REQUEST_TYPE,
+              content: `The Markdown super-summary has been captured. Do not repeat it. Call ${DECISION_TOOL_NAME} exactly once now with continuation set to continue or stop. Do not call any other tool or emit additional commentary.`,
+              display: false,
+              details: { version: 3, requestId: request.id, correction: true },
+            },
+            { triggerTurn: true, deliverAs: "steer" },
+          );
+        } catch (error) {
+          fail(ctx, error instanceof Error ? error.message : String(error));
+        }
         return;
       }
 
@@ -862,17 +1265,104 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    ctx.compact({
-      onComplete: () => finish(ctx),
-      onError: (error) => fail(ctx, error.message),
-    });
+    try {
+      ctx.compact({
+        onComplete: () => finish(ctx),
+        onError: (error) => fail(ctx, error.message),
+      });
+    } catch (error) {
+      fail(ctx, error instanceof Error ? error.message : String(error));
+    }
   });
 
-  const startFromCommand = (
+  const startPreparation = (
     extraContext: string,
     ctx: ExtensionContext,
   ): void => {
-    const result = beginSupercompact(extraContext.trim(), ctx);
+    if (!ctx.hasUI) {
+      notify(
+        ctx,
+        "Pre-compaction preparation requires TUI or RPC mode for final confirmation.",
+        "error",
+      );
+      return;
+    }
+    if (request || confirmationId || preparationGrant) {
+      notify(
+        ctx,
+        "A supercompact preparation, confirmation, or compaction is already active.",
+        "warning",
+      );
+      return;
+    }
+
+    const idle = ctx.isIdle();
+    const id = createId();
+    preparationGrant = {
+      id,
+      extraContext: extraContext.trim(),
+      consumed: false,
+      revoked: false,
+    };
+    if (!reconcileAgentTool(ctx)) {
+      preparationGrant = undefined;
+      reconcileAgentTool(ctx, false);
+      return;
+    }
+
+    const notification = idle
+      ? "Pre-compaction wrap started."
+      : "Pre-compaction wrap queued; finishing the current tool batch first.";
+    notify(
+      ctx,
+      extraContext.trim()
+        ? `${notification}\nExtra instructions: ${extraContext.trim()}`
+        : notification,
+    );
+
+    try {
+      pi.sendMessage(
+        {
+          customType: PREPARATION_REQUEST_TYPE,
+          content: buildPreparationPrompt(extraContext),
+          display: false,
+          details: { version: 1, preparationId: id },
+        },
+        idle
+          ? { triggerTurn: true, deliverAs: "steer" }
+          : { deliverAs: "steer" },
+      );
+    } catch (error) {
+      preparationGrant = undefined;
+      reconcileAgentTool(ctx);
+      notify(
+        ctx,
+        `Supercompact preparation failed: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+    }
+  };
+
+  const startForce = (extraContext: string, ctx: ExtensionContext): void => {
+    if (confirmationId) {
+      notify(
+        ctx,
+        "Cannot force supercompaction while agent confirmation is open.",
+        "warning",
+      );
+      return;
+    }
+    if (request) {
+      notify(ctx, "Supercompact is already in progress.", "warning");
+      return;
+    }
+    if (preparationGrant && !preparationGrant.consumed) {
+      preparationGrant = undefined;
+      reconcileAgentTool(ctx);
+      notify(ctx, "Pending pre-compaction preparation was canceled.");
+    }
+
+    const result = beginSupercompact(extraContext.trim(), undefined, ctx);
     if (result.started) return;
     notify(
       ctx,
@@ -881,91 +1371,101 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     );
   };
 
-  const allowAgentToolOnce = (ctx: ExtensionContext): void => {
-    if (request) {
+  const allowAgentTool = (ctx: ExtensionContext): void => {
+    if (sessionPolicyOverride === "allowed") {
+      notify(ctx, "Agent supercompaction requests are already allowed.");
+      return;
+    }
+
+    sessionPolicyOverride = "allowed";
+    if (reconcileAgentTool(ctx)) {
       notify(
         ctx,
-        "Cannot grant a new one-time authorization while supercompact is already in progress.",
-        "warning",
+        "Agent supercompaction requests are allowed for this live session.",
       );
-      return;
-    }
-    if (agentToolMode === "enabled") {
-      notify(ctx, "The supercompact agent tool is already enabled.");
-      return;
-    }
-    if (agentToolMode === "once") {
-      notify(ctx, "One agent supercompaction is already authorized.");
-      return;
-    }
-    if (applyAgentToolMode("once", ctx)) {
-      notify(ctx, "The agent may run supercompact once.");
     }
   };
 
-  const enableAgentTool = (ctx: ExtensionContext): void => {
-    if (agentToolMode === "enabled") {
-      notify(ctx, "The supercompact agent tool is already enabled.");
-      return;
+  const forbidAgentTool = (ctx: ExtensionContext): void => {
+    const wasAlreadyForbidden =
+      sessionPolicyOverride === "forbidden" &&
+      !preparationGrant &&
+      !confirmationId;
+    sessionPolicyOverride = "forbidden";
+
+    const canceledConfirmation = cancelPendingConfirmation();
+    const canceledPreparation = Boolean(
+      preparationGrant && !preparationGrant.consumed,
+    );
+    if (canceledPreparation) {
+      preparationGrant = undefined;
+    } else if (preparationGrant?.consumed) {
+      preparationGrant.revoked = true;
     }
-    if (applyAgentToolMode("enabled", ctx)) {
-      notify(ctx, "The supercompact agent tool is enabled for this session.");
+    reconcileAgentTool(ctx);
+
+    if (canceledConfirmation || canceledPreparation) {
+      notify(ctx, "Pending pre-compaction preparation was canceled.");
     }
+    notify(
+      ctx,
+      wasAlreadyForbidden
+        ? "Agent supercompaction requests are already forbidden."
+        : "Agent supercompaction requests are forbidden for this live session.",
+    );
   };
 
-  const disableAgentTool = (ctx: ExtensionContext): void => {
-    if (
-      agentToolMode === "disabled" &&
-      !pi.getActiveTools().includes(AGENT_TOOL_NAME)
-    ) {
-      notify(ctx, "The supercompact agent tool is already disabled.");
-      return;
-    }
-    if (applyAgentToolMode("disabled", ctx)) {
-      notify(ctx, "The supercompact agent tool is disabled for this session.");
-    }
-  };
+  const showContextEditor = async (
+    title: string,
+    ctx: ExtensionContext,
+  ): Promise<string | undefined> => ctx.ui.editor(title, "");
 
   const showCommandMenu = async (ctx: ExtensionContext): Promise<void> => {
     if (!ctx.hasUI) {
       notify(
         ctx,
-        "The supercompact menu requires TUI or RPC mode. Use /supercompact run, allow, enable, or disable.",
+        `The supercompact menu requires TUI or RPC mode. ${USAGE}`,
         "error",
       );
       return;
     }
 
-    const run = "Run supercompact now";
-    const allow = "Allow one agent supercompaction";
-    const enable = "Enable the agent tool for this session";
-    const disable = "Disable the agent tool for this session";
+    const run = "Run pre-compaction wrap";
+    const force = "Force supercompaction now";
+    const allow = "Allow agent supercompaction requests for this session";
+    const forbid = "Forbid agent supercompaction requests for this session";
+    const cancel = "Cancel";
     const choice = await ctx.ui.select("Supercompact", [
       run,
+      force,
       allow,
-      enable,
-      disable,
+      forbid,
+      cancel,
     ]);
 
     if (choice === run) {
-      const extraContext = await ctx.ui.editor(
-        "Optional extra context for the super-summary",
-        "",
+      const extraContext = await showContextEditor(
+        "Optional context for the pre-compaction wrap",
+        ctx,
       );
-      if (extraContext !== undefined) startFromCommand(extraContext, ctx);
+      if (extraContext !== undefined) startPreparation(extraContext, ctx);
+    } else if (choice === force) {
+      const extraContext = await showContextEditor(
+        "Optional extra context for the super-summary",
+        ctx,
+      );
+      if (extraContext !== undefined) startForce(extraContext, ctx);
     } else if (choice === allow) {
-      allowAgentToolOnce(ctx);
-    } else if (choice === enable) {
-      enableAgentTool(ctx);
-    } else if (choice === disable) {
-      disableAgentTool(ctx);
+      allowAgentTool(ctx);
+    } else if (choice === forbid) {
+      forbidAgentTool(ctx);
     }
   };
 
   pi.registerCommand("supercompact", {
-    description: "Run or configure supercompaction",
+    description: "Prepare, force, allow, or forbid supercompaction",
     getArgumentCompletions: (prefix) => {
-      const commands = ["run", "allow", "enable", "disable"];
+      const commands = ["run", "force", "allow", "forbid"];
       const matches = commands.filter((command) => command.startsWith(prefix));
       return matches.length === 0
         ? null
@@ -983,19 +1483,15 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       const remainder = match?.[2]?.trim() ?? "";
 
       if (action === "run") {
-        startFromCommand(remainder, ctx);
+        startPreparation(remainder, ctx);
+      } else if (action === "force") {
+        startForce(remainder, ctx);
       } else if (action === "allow" && !remainder) {
-        allowAgentToolOnce(ctx);
-      } else if (action === "enable" && !remainder) {
-        enableAgentTool(ctx);
-      } else if (action === "disable" && !remainder) {
-        disableAgentTool(ctx);
+        allowAgentTool(ctx);
+      } else if (action === "forbid" && !remainder) {
+        forbidAgentTool(ctx);
       } else {
-        notify(
-          ctx,
-          "Usage: /supercompact [run [extra context] | allow | enable | disable]",
-          "error",
-        );
+        notify(ctx, USAGE, "error");
       }
     },
   });
