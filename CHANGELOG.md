@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-07-22
+
 - Provide `/supercompact run`, `/supercompact force`, `/supercompact allow`, `/supercompact allow-noconfirm`, `/supercompact deny`, and `/supercompact abort` for preparation, explicit immediate execution, request permission, and pre-native cancellation.
 - Keep the public request and internal decision tool schemas active throughout the extension session while enforcing authorization and workflow phases at execution time.
 - Use `requireConfirmation` as the global confirmation default, `agentRequestsAllowed` for persistent request permission, and inheritable `agentRequestsRequireConfirmation` for config-authorized requests, with trusted-project policy precedence and invalid configuration failing closed.
