@@ -2,7 +2,9 @@
 
 ## Objective
 
-Keep both extension tool schemas active for the entire Pi session so `/supercompact run`, `/supercompact allow`, `/supercompact forbid`, summary preparation, and workflow cleanup do not change the provider tool list or invalidate an otherwise reusable prompt-cache prefix.
+Keep both extension tool schemas active for the entire Pi session so `/supercompact run`, `/supercompact allow`, `/supercompact allow-noconfirm`, `/supercompact deny`, summary preparation, and workflow cleanup do not change the provider tool list or invalidate an otherwise reusable prompt-cache prefix.
+
+Add an explicitly user-enabled, live-session `allow-noconfirm` mode so the agent can request and begin supercompaction without a final dialog. Keep normal `allow` confirmation-required, keep the bypass impossible to configure persistently, and preserve every other runtime and workflow guard.
 
 Tool visibility must not grant authority. The public `supercompact` tool and internal `record_supercompact_decision` tool must remain protected by authoritative runtime state checks and return the most useful agent-facing message for the exact state in which an invalid call occurs.
 
@@ -28,7 +30,7 @@ Register these tools exactly once when the extension loads and leave both active
 - `supercompact`
 - `record_supercompact_decision`
 
-The extension must not add or remove either tool in response to configuration, `/run`, `/allow`, `/forbid`, confirmation, summary phases, success, failure, session replacement, or shutdown.
+The extension must not add or remove either tool in response to configuration, `/run`, `/allow`, `/allow-noconfirm`, `/deny`, confirmation, summary phases, success, failure, session replacement, or shutdown.
 
 Remove the extension's dynamic active-tool machinery:
 
@@ -36,7 +38,7 @@ Remove the extension's dynamic active-tool machinery:
 - `reconcileAgentTool`
 - lazy decision-tool registration
 - decision-tool activation and deactivation
-- public-tool removal during forbid, failure, settlement, or lifecycle cleanup
+- public-tool removal during denial, failure, settlement, or lifecycle cleanup
 
 Implement one canonical stable-schema path without aliases or alternate activation modes.
 
@@ -48,16 +50,17 @@ If Pi or the user explicitly excludes either tool through host-level tool select
 
 The public tool remains visible but must execute only when one of these is true:
 
-- effective session permission is allowed; or
+- effective session permission is confirmation-required `allowed` or session-only `allowed-noconfirm`; or
 - an unused `/supercompact run` preparation grant exists.
 
-The existing runtime state remains authoritative:
+The runtime state remains authoritative:
 
 ```ts
-type AgentPermission = "allowed" | "forbidden";
+type ConfiguredPermission = "allowed" | "denied";
+type SessionPermissionOverride = ConfiguredPermission | "allowed-noconfirm";
 
-let configuredPermission: AgentPermission = "forbidden";
-let sessionPermissionOverride: AgentPermission | undefined;
+let configuredPermission: ConfiguredPermission = "denied";
+let sessionPermissionOverride: SessionPermissionOverride | undefined;
 let preparationGrant: PreparationGrant | undefined;
 let confirmationId: string | undefined;
 let request: SupercompactRequest | undefined;
@@ -69,7 +72,7 @@ Derived permission:
 const effectivePermission = sessionPermissionOverride ?? configuredPermission;
 ```
 
-The public tool's presence in the tool list must never be treated as authorization. The execute handler must recheck request, confirmation, permission, grant consumption, grant revocation, UI capability, and post-dialog authorization.
+The public tool's presence in the tool list must never be treated as authorization. The execute handler must recheck request, confirmation, permission, grant consumption, grant revocation, UI requirements, internal-tool availability, and authorization at the last applicable boundary.
 
 ### Configuration
 
@@ -88,23 +91,48 @@ Locations remain:
 
 Rules:
 
-1. Missing configuration defaults to forbidden.
+1. Missing configuration defaults to denied.
 2. A trusted project value overrides the global value.
 3. Invalid configuration fails closed and warns when UI is available.
 4. Only the boolean `agentRequestsAllowed` property grants configured permission; unrecognized properties do not grant access.
-5. `/allow` and `/forbid` remain live-session, in-memory overrides and never write configuration.
-6. Lifecycle initialization discards the override and reapplies configuration.
+5. `/allow`, `/allow-noconfirm`, and `/deny` remain live-session, in-memory overrides and never write configuration.
+6. Configuration can enable confirmation-required agent requests only; no configuration property or startup fallback may enable no-confirm mode.
+7. Lifecycle initialization discards the override and reapplies configuration.
+
+### Session-only no-confirm permission
+
+Add this positional command keyword to the existing command and menu model:
+
+```text
+/supercompact allow-noconfirm
+```
+
+Do not implement slash-command `--flag` parsing. Pi passes extension command arguments as raw text and its extension examples favor positional keywords or distinct commands. `allow-noconfirm` must appear in argument completions and as a clearly labeled menu action.
+
+Semantics:
+
+1. `allow-noconfirm` grants agent request permission and waives the final confirmation dialog for the current live extension session only.
+2. The command never writes configuration and has no persistent configuration equivalent.
+3. Normal `allow` continues to grant agent request permission with final confirmation required.
+4. `deny` revokes either allowed mode, cancels unused preparation or an open confirmation, and returns the session to explicit denial.
+5. Session start, reload, resume, fork, and shutdown discard no-confirm permission and reapply configured permission. A configured `true` value restores confirmation-required `allowed`, never `allowed-noconfirm`.
+6. No-confirm mode skips only `ctx.ui.confirm`. It does not bypass focused preparation expectations, exact-next-action validation, busy/concurrency checks, internal-tool availability, summary validation, hard-stop constraints, bounded retries, native compaction, filtering, restoration, or cleanup.
+7. Because no dialog is required, an authorized no-confirm request may execute without TUI or RPC UI capability. Normal `allow` and one-off `run` requests remain confirmation-required unless no-confirm mode is currently active.
+8. The public tool should return an explicit success result stating that session no-confirm permission authorized and queued the workflow.
+9. Status should distinguish the mode with `supercompact: allowed without confirmation`.
+10. Notifications and documentation must state plainly that the mode permits agent-requested compaction without another approval prompt.
 
 ### Public-tool description
 
 Rewrite the permanent public-tool description for always-visible semantics. It must state:
 
 - availability does not imply authorization;
-- the tool is a request for final user confirmation, not permission to compact unilaterally;
+- the tool requests supercompaction but never grants its own authority;
+- final user confirmation is normally required, while explicit live-session no-confirm permission may waive only that dialog;
 - the agent must complete the focused preparation checks first;
 - the agent should call after an explicit hidden `/run` preparation request, or when the conversation makes supercompaction appropriate and session permission may exist;
-- the execute result will explain when the user must authorize the request;
-- the agent must not repeatedly retry a denied, declined, revoked, busy, or headless request.
+- the execute result will explain whether authorization is absent, confirmation is required, or no-confirm permission queued the workflow;
+- the agent must not repeatedly retry a denied, declined, revoked, busy, unavailable, or confirmation-required headless request.
 
 Do not add a dynamic prompt snippet or prompt guideline. Dynamic prompt text would undermine the stable-prefix objective.
 
@@ -132,19 +160,20 @@ Centralize or consistently construct state-specific messages. Do not collapse ma
 
 Use these semantic outcomes; exact prose may be polished, but every message must contain the listed action guidance.
 
-| Circumstance                                                        | Required agent-facing guidance                                                                                                                                                                           |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Default or configured permission is forbidden and no grant exists   | The request is not authorized. The user must run `/supercompact run` for a prepared one-off request or `/supercompact allow` for live-session permission. Do not retry automatically; wait for the user. |
-| Session override is explicitly forbidden                            | The user explicitly forbade agent supercompaction requests for this live session. Only the user can reauthorize with `/supercompact run` or `/supercompact allow`. Do not retry automatically.           |
-| A summary or native compaction request is active                    | Supercompaction is already in progress. Do not submit another request; wait for the existing workflow to settle.                                                                                         |
-| A confirmation dialog is active                                     | A confirmation is already awaiting the user's response. Do not open or retry another request; wait for the result.                                                                                       |
-| Permission exists but `ctx.hasUI` is false                          | Agent-triggered supercompaction requires TUI or RPC confirmation. The user must invoke `/supercompact force` explicitly if immediate headless compaction is desired. Do not retry automatically.         |
-| `nextAction` is empty                                               | Supply one concrete next action, or explicitly state that the agent will wait for the user.                                                                                                              |
-| Confirmation is declined                                            | The user declined this request. Do not retry automatically; wait for user direction.                                                                                                                     |
-| Confirmation is canceled                                            | The confirmation was canceled. Do not retry automatically; wait for user direction.                                                                                                                      |
-| Authorization is revoked or expires while the dialog is open        | The request is no longer authorized. Do not retry automatically; wait for the user to reauthorize.                                                                                                       |
-| Summary workflow cannot start because the internal tool is excluded | Explain that the required internal decision tool is unavailable in the current Pi tool selection and that the user must re-enable it or reload with the extension tools available.                       |
-| Summary queueing or native compaction fails                         | Preserve the current specific failure reason and state that no automatic retry will occur.                                                                                                               |
+| Circumstance                                                        | Required agent-facing guidance                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Default or configured permission is denied and no grant exists      | The request is not authorized. The user must run `/supercompact run` for a prepared one-off request, `/supercompact allow` for confirmation-required live-session permission, or `/supercompact allow-noconfirm` for live-session permission without the final dialog. Do not retry automatically; wait for the user. |
+| Session override is explicitly denied                               | The user explicitly denied agent supercompaction requests for this live session. Only the user can reauthorize with `/supercompact run`, `/supercompact allow`, or `/supercompact allow-noconfirm`. Do not retry automatically.                                                                                       |
+| A summary or native compaction request is active                    | Supercompaction is already in progress. Do not submit another request; wait for the existing workflow to settle.                                                                                                                                                                                                      |
+| A confirmation dialog is active                                     | A confirmation is already awaiting the user's response. Do not open or retry another request; wait for the result.                                                                                                                                                                                                    |
+| Confirmation-required permission exists but `ctx.hasUI` is false    | Agent-triggered supercompaction requires TUI or RPC confirmation in the current permission mode. The user must invoke `/supercompact force` explicitly or enable `/supercompact allow-noconfirm`. Do not retry automatically.                                                                                         |
+| `nextAction` is empty                                               | Supply one concrete next action, or explicitly state that the agent will wait for the user.                                                                                                                                                                                                                           |
+| Confirmation is declined                                            | The user declined this request. Do not retry automatically; wait for user direction.                                                                                                                                                                                                                                  |
+| Confirmation is canceled                                            | The confirmation was canceled. Do not retry automatically; wait for user direction.                                                                                                                                                                                                                                   |
+| Authorization is revoked or expires while the dialog is open        | The request is no longer authorized. Do not retry automatically; wait for the user to reauthorize.                                                                                                                                                                                                                    |
+| Summary workflow cannot start because the internal tool is excluded | Explain that the required internal decision tool is unavailable in the current Pi tool selection and that the user must re-enable it or reload with the extension tools available.                                                                                                                                    |
+| Session no-confirm permission authorizes execution                  | State that explicit live-session no-confirm permission authorized the request and that canonical summary and native compaction were queued without a confirmation dialog.                                                                                                                                             |
+| Summary queueing or native compaction fails                         | Preserve the current specific failure reason and state that no automatic retry will occur.                                                                                                                                                                                                                            |
 
 Thrown tool errors are agent-visible results and must be as actionable as returned decline/cancellation results.
 
@@ -166,14 +195,14 @@ Commands cannot rely on a tool becoming active because schemas are stable.
 
 Before `/run` sends preparation:
 
-1. Require TUI or RPC confirmation capability as today.
+1. Require TUI or RPC confirmation capability unless effective session permission is `allowed-noconfirm`.
 2. Verify the public tool is present in Pi's active tool selection.
 3. Verify the internal decision tool is present, because accepted confirmation would otherwise be unable to summarize.
 4. If either is excluded, do not create a grant or send preparation. Notify the user which required tool is unavailable and that Pi tool selection or extension loading must be corrected.
 
 Before `/force` begins summary, verify the internal decision tool is available. Fail early with the same actionable diagnostic.
 
-`/allow` and `/forbid` still update permission and status even if host-level tool selection excludes the public tool, but notify the user that permission changed while execution remains unavailable until the tool is re-enabled.
+`/allow`, `/allow-noconfirm`, and `/deny` still update permission and status even if host-level tool selection excludes the public tool, but notify the user that permission changed while execution remains unavailable until the tool is re-enabled.
 
 ## Status and lifecycle behavior
 
@@ -181,8 +210,9 @@ Status continues to describe permission and workflow state, never schema state:
 
 - pending preparation: `supercompact: preparing`
 - confirmation: `supercompact: awaiting confirmation`
-- session permission: `supercompact: allowed`
-- forbidden with no workflow: no status
+- confirmation-required session permission: `supercompact: allowed`
+- no-confirm session permission: `supercompact: allowed without confirmation`
+- denied with no workflow: no status
 
 Replace all schema reconciliation calls with status reconciliation. State cleanup must still:
 
@@ -193,7 +223,7 @@ Replace all schema reconciliation calls with status reconciliation. State cleanu
 - preserve or reset session permission according to lifecycle rules;
 - leave both tool schemas untouched.
 
-`/forbid` must revoke runtime permission and cancel unused preparation or confirmation without removing either schema. It must not corrupt an active canonical summary or native compaction.
+`/deny` must revoke confirmation-required or no-confirm runtime permission and cancel unused preparation or confirmation without removing either schema. It must not corrupt an active canonical summary or native compaction.
 
 Session start, shutdown, success, decline, cancellation, revocation, queue failure, summary failure, and compaction failure must all leave authorization and UI state correct while the active tool vector remains unchanged.
 
@@ -202,7 +232,7 @@ Session start, shutdown, success, decline, cancellation, revocation, queue failu
 With both schemas active from extension load:
 
 - `/run` adds only the hidden preparation message and changes in-memory state/status;
-- `/allow` and `/forbid` change only in-memory state/status;
+- `/allow`, `/allow-noconfirm`, and `/deny` change only in-memory state/status;
 - entering and leaving the canonical-summary phase does not alter the active tool vector;
 - success and failure cleanup do not alter the active tool vector.
 
@@ -276,6 +306,18 @@ Generic references to the current user, explicit user authorization, and user co
 
 Add focused prompt-contract tests that reject skill names, private-workflow references, migration language, and unconditional repository assumptions while asserting the required refresh, closure, authorization, blocker, verification, and exact-next-action concepts.
 
+## Execution sequence
+
+Use this order so the stable-schema work remains coherent and the new permission mode is verified as part of the final product:
+
+1. Preserve the completed stable-schema, runtime-gating, concise-preview, prompt, documentation, and test changes already present in the working tree.
+2. Re-run the focused baseline tests after compaction before changing permission behavior.
+3. Implement `allow-noconfirm` as an additional session override without weakening normal `allow` or any non-dialog workflow guard.
+4. Add focused tests for the new mode, then update README and changelog to describe the complete resulting behavior.
+5. Run all package and filtered-workspace validation.
+6. Repeat isolated live Pi verification for both confirmation-required and no-confirm flows. Earlier live verification of the confirmation-required stable-schema baseline is useful evidence but does not replace this final run.
+7. Perform the final plan-to-code audit, remove this plan only when every criterion passes, commit child before parent, and report the full completed work.
+
 ## Implementation outline
 
 ### `src/index.ts`
@@ -293,7 +335,11 @@ Add focused prompt-contract tests that reject skill names, private-workflow refe
 11. Keep full confirmation values in summary and continuation state; truncate only dialog presentation.
 12. Rewrite permanent prompt and tool text according to the evergreen prompt-content requirements.
 13. Generalize canonical handoff resource guidance without losing exact actionable references.
-14. Preserve preparation, final confirmation, summary generation, continuation constraints, filtering, retry bounds, compaction, and restoration behavior.
+14. Preserve preparation, final confirmation whenever the permission mode requires it, summary generation, continuation constraints, filtering, retry bounds, compaction, and restoration behavior.
+15. Add `allow-noconfirm` parsing, completion, menu handling, notification, status, and lifecycle reset.
+16. Skip the final dialog only when effective session permission is exactly `allowed-noconfirm`, then begin the existing canonical-summary path directly.
+17. Permit no-confirm execution without UI while retaining the current headless rejection and `/force` guidance for confirmation-required permission.
+18. Keep the full request, preparation, internal-tool, summary, compaction, and restoration gates identical after either confirmed or no-confirm authorization.
 
 ### `tests/index.test.ts`
 
@@ -304,37 +350,46 @@ Add or revise tests for:
 1. Both tools are registered exactly once at extension load.
 2. Both tools remain in the active vector when config is missing, false, true, invalid, globally set, or project-overridden.
 3. The extension never calls `pi.setActiveTools()` during initialization or any workflow transition.
-4. Active tools remain identical across `/run`, `/allow`, `/forbid`, confirmation acceptance, decline, cancellation, revocation, summary validation, success, failure, session start, and shutdown.
-5. Missing config rejects a public call with `/run` and `/allow` guidance.
-6. Explicit `/forbid` rejects with an explicit-user-revocation message distinct from default forbidden.
+4. Active tools remain identical across `/run`, `/allow`, `/allow-noconfirm`, `/deny`, confirmation acceptance, no-confirm execution, decline, cancellation, revocation, summary validation, success, failure, session start, and shutdown.
+5. Missing config rejects a public call with `/run`, `/allow`, and `/allow-noconfirm` guidance.
+6. Explicit `/deny` rejects with an explicit-user-revocation message distinct from default denied.
 7. Active confirmation rejects duplicates with wait-for-confirmation guidance.
 8. Active summary/compaction rejects duplicates with wait-for-settlement guidance.
-9. Headless agent execution directs the user to TUI/RPC or explicit `/force` and forbids automatic retry.
+9. Headless confirmation-required execution directs the user to TUI/RPC, explicit `/force`, or `/allow-noconfirm` and prohibits automatic retry.
 10. Empty `nextAction` gives concrete correction guidance.
 11. Decline, cancellation, and dialog-time revocation each return distinct actionable guidance.
 12. The internal decision tool rejects an out-of-workflow call with hidden-summary-only guidance.
 13. Internal queued, already-decided, missing-summary, mixed-batch, duplicate, and hard-stop states remain distinct and actionable.
 14. `agentRequestsAllowed` global and trusted-project precedence works.
-15. Configuration without a recognized permission property defaults to forbidden.
-16. `/allow` and `/forbid` remain in memory and never write config.
+15. Configuration without a recognized permission property defaults to denied.
+16. `/allow`, `/allow-noconfirm`, and `/deny` remain in memory and never write config.
 17. `/run` fails before creating a grant when the public or internal tool is excluded by host selection.
 18. `/force` fails before summary when the internal tool is excluded.
-19. `/allow` and `/forbid` report permission plus host-level unavailability when the public tool is excluded.
+19. `/allow`, `/allow-noconfirm`, and `/deny` report permission plus host-level unavailability when the public tool is excluded.
 20. Preparation and summary prompts contain no skill names, private-workflow references, personal names, migration language, or unconditional repository assumptions.
 21. Prompt tests preserve focused context refresh, scoped staleness correction, authorized completion, blockers, conditional verification/persistence, continuation choice, and exact-next-action guidance.
 22. Confirmation previews preserve values of 10 words or fewer and truncate longer values to exactly 10 words plus one Unicode ellipsis.
 23. Confirmation preview tests cover whitespace normalization, multiline input, absent optional contexts, and one blank line between every displayed block.
 24. Full next-action and context values remain unchanged in the canonical summary prompt and restored workflow metadata after their dialog previews are truncated.
 25. Existing preparation, confirmation, continuation, filtering, auto-compaction, bounded retry, synchronous failure, and restoration tests continue to pass.
+26. `allow-noconfirm` is present in completions and the menu and rejects extra arguments.
+27. `allow-noconfirm` sets distinct session status, never writes config, and resets to configured confirmation-required permission on lifecycle initialization.
+28. An authorized no-confirm public call opens no dialog, returns explicit no-confirm authorization guidance, and starts exactly one summary workflow.
+29. No-confirm mode works without UI but still rejects empty next actions, busy workflows, and missing internal-tool availability.
+30. Normal `allow` continues to require confirmation, and `deny` revokes both allowed modes.
+31. Prepared `/run` execution skips its dialog only while no-confirm session permission is active.
+32. Active tools remain identical throughout no-confirm command, execution, summary, success, failure, denial, and lifecycle cleanup.
 
 ### `README.md`
 
 Update:
 
 - configuration key and permission semantics;
+- `allow`, session-only `allow-noconfirm`, and `deny` behavior;
+- the explicit safety distinction between confirmation-required and no-confirm permission;
 - always-visible tool behavior;
 - authorization as an execute-time gate;
-- user and agent messages for forbidden/headless/busy states;
+- user and agent messages for denied/headless/busy states;
 - stable public and internal schemas;
 - cache expectations and remaining provider-dependent miss causes;
 - host-level explicit tool exclusion behavior;
@@ -352,7 +407,8 @@ Add unreleased entries for:
 - execute-time authorization gates;
 - `agentRequestsAllowed` configuration;
 - state-specific agent guidance;
-- elimination of extension-driven tool-schema changes.
+- elimination of extension-driven tool-schema changes;
+- session-only no-confirm permission and preservation of all non-dialog workflow guards.
 
 ## Validation
 
@@ -380,21 +436,23 @@ Run `git diff --check` and confirm no unrelated child or superproject changes ar
 
 Use an isolated Pi process with only this extension explicitly loaded. Verify:
 
-1. Both tools are present immediately after startup with default-forbidden configuration.
+1. Both tools are present immediately after startup with default-denied configuration.
 2. An unauthorized public tool attempt receives the exact user-authorization guidance and starts no dialog or summary.
 3. `/run` starts preparation without changing the active tool vector.
-4. `/allow` and `/forbid` change permission/status without changing the active tool vector.
-5. Authorized execution still opens final confirmation.
+4. `/allow`, `/allow-noconfirm`, and `/deny` change permission/status without changing the active tool vector.
+5. Normal `allow` execution still opens final confirmation.
 6. Long next-action and context values render as 10-word previews with ellipses and blank lines between blocks.
 7. The canonical summary still receives every untruncated value shown as a shortened preview.
 8. Decline, cancellation, and revocation give distinct no-retry guidance.
 9. Accepted confirmation completes summary and native compaction.
-10. `/force` works while public requests are forbidden.
-11. The internal tool rejects an out-of-workflow call and works during the canonical summary turn.
-12. The active tool vector is unchanged before preparation, during summary, and after settlement.
-13. On a session with a reusable long prefix, `/run` and summary-phase entry produce no extension-caused schema change. Record cache observations as provider-dependent evidence, not a guaranteed assertion.
-14. Confirm no verification process modified project files.
-15. Check for attached tmux clients before cleaning up every verification session.
+10. `allow-noconfirm` execution opens no confirmation dialog, reports the bypass explicitly, and completes summary and native compaction.
+11. No-confirm execution works without UI and configured permission never restores no-confirm mode after lifecycle reset.
+12. `/deny` revokes no-confirm permission and `/force` works while public requests are denied.
+13. The internal tool rejects an out-of-workflow call and works during both confirmed and no-confirm canonical summary turns.
+14. The active tool vector is unchanged before preparation, during confirmed and no-confirm summaries, and after settlement.
+15. On a session with a reusable long prefix, `/run`, no-confirm execution, and summary-phase entry produce no extension-caused schema change. Record cache observations as provider-dependent evidence, not a guaranteed assertion.
+16. Confirm no verification process modified project files.
+17. Check for attached tmux clients before cleaning up every verification session.
 
 ## Completion and deletion criteria
 
@@ -404,14 +462,15 @@ Delete this plan only after all of the following are true:
 2. The extension makes no authorization-driven `setActiveTools()` calls.
 3. Runtime gates prevent unauthorized public and internal execution.
 4. State-specific agent guidance is implemented and tested.
-5. Configuration uses `agentRequestsAllowed`; missing, unrecognized, and invalid permission fails closed.
-6. Preparation, confirmation, continuation, filtering, retry, cleanup, and compaction regressions pass.
-7. Confirmation displays only 10-word freeform previews with blank-line-separated blocks while canonical workflow data remains lossless.
-8. Every permanent prompt and tool description is self-contained, evergreen, broadly applicable, and free of skill or private-workflow references.
-9. README and changelog describe only the final behavior without stale dynamic-schema or migration language.
-10. Package and workspace validation pass.
-11. Live Pi verification passes, including stable active tools and an accepted compaction workflow.
-12. A final review finds no unresolved item, unsupported assumption, or unrelated modification.
+5. Configuration uses `agentRequestsAllowed`; missing, unrecognized, and invalid permission fails closed, and configuration cannot enable no-confirm mode.
+6. `allow-noconfirm` is session-only, skips only the final dialog, works headlessly, resets on lifecycle initialization, and is revoked by `deny`.
+7. Preparation, confirmation, no-confirm authorization, continuation, filtering, retry, cleanup, and compaction regressions pass.
+8. Confirmation displays only 10-word freeform previews with blank-line-separated blocks while canonical workflow data remains lossless.
+9. Every permanent prompt and tool description is self-contained, evergreen, broadly applicable, and free of skill or private-workflow references.
+10. README and changelog describe only the final behavior without stale dynamic-schema or migration language.
+11. Package and workspace validation pass.
+12. Live Pi verification passes, including stable active tools, a confirmed compaction workflow, and a no-confirm compaction workflow.
+13. A final review finds no unresolved item, unsupported assumption, or unrelated modification.
 
 Then delete `PLAN.md`, commit the child package with a Conventional Commit, and commit only the updated `packages/pi-supercompact` pointer in the superproject. Do not push or publish.
 
@@ -424,4 +483,7 @@ Immediate next action:
 1. Re-read this entire plan.
 2. Revalidate the child and superproject working trees, preserving unrelated `packages/pi-workflow` work.
 3. Re-read the current `src/index.ts` and `tests/index.test.ts` before editing.
-4. Implement stable schemas and informative state-specific guidance according to this plan.
+4. Re-run focused baseline tests for the stable-schema implementation already in the working tree.
+5. Implement `allow-noconfirm` according to the session-only semantics and execution sequence above.
+6. Finish all remaining validation, live verification, audit, plan deletion, and child-before-parent commits without requesting approval already given.
+7. Deliver a concise final report summarizing the complete stable-schema, authorization, confirmation-preview, prompt, documentation, validation, live-verification, no-confirm, and commit work. The exact final word of that report must be `Pickle.`
