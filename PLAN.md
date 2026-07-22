@@ -4,7 +4,7 @@
 
 Keep both extension tool schemas active for the entire Pi session so `/supercompact run`, `/supercompact allow`, `/supercompact allow-noconfirm`, `/supercompact deny`, `/supercompact abort`, summary preparation, and workflow cleanup do not change the provider tool list or invalidate an otherwise reusable prompt-cache prefix.
 
-Support explicitly enabled no-confirm permission through either the live-session `allow-noconfirm` override or persistent `agentRequestsRequireConfirmation: false` configuration. Keep normal `allow` confirmation-required and preserve every other runtime and workflow guard.
+Support configurable confirmation through a global default plus an agent-request-specific override. Keep explicit live-session `allow` confirmation-required, keep `allow-noconfirm` dialog-free, keep `/force` immediate, and preserve every other runtime and workflow guard.
 
 Add `/supercompact abort` to cancel extension-controlled preparation, confirmation, and canonical-summary work before Pi native compaction begins, with an idle error notification and an explicit Escape fallback once native compaction owns cancellation.
 
@@ -80,10 +80,11 @@ The public tool's presence in the tool list must never be treated as authorizati
 
 ### Configuration
 
-Configuration describes request permission and whether allowed requests require the final dialog:
+Configuration describes request permission, the global confirmation default, and an optional agent-request-specific override:
 
 ```json
 {
+  "requireConfirmation": true,
   "agentRequestsAllowed": true,
   "agentRequestsRequireConfirmation": false
 }
@@ -100,10 +101,24 @@ Rules:
 2. A trusted project value overrides the global value.
 3. Invalid configuration fails closed and warns when UI is available.
 4. Only the boolean `agentRequestsAllowed` property grants configured request permission; unrecognized properties do not grant access.
-5. `agentRequestsRequireConfirmation` is optional, must be boolean when present, and defaults to `true`.
-6. `agentRequestsRequireConfirmation: false` yields configured `allowed-noconfirm` only when `agentRequestsAllowed` is also `true`; it never grants request permission by itself.
-7. `/allow`, `/allow-noconfirm`, and `/deny` remain live-session, in-memory overrides and never write configuration.
-8. Lifecycle initialization discards the override and reapplies configured denied, confirmation-required allowed, or no-confirm allowed permission.
+5. `requireConfirmation` is optional, must be boolean when present, and defaults to `true`. It controls prepared `/run` requests when no explicit allowed session override selects a confirmation mode.
+6. `agentRequestsRequireConfirmation` is optional, must be boolean when present, and inherits `requireConfirmation` when omitted. It controls config-authorized agent requests.
+7. `agentRequestsRequireConfirmation: false` yields configured `allowed-noconfirm` only when `agentRequestsAllowed` is also `true`; it never grants request permission by itself.
+8. Any recognized confirmation property with a non-boolean value makes the configuration invalid and fails closed to denied requests with confirmation required.
+9. `/allow`, `/allow-noconfirm`, and `/deny` remain live-session, in-memory overrides and never write configuration.
+10. Lifecycle initialization discards the override and reapplies configured denied, confirmation-required allowed, or no-confirm allowed permission.
+11. Each `/run` grant captures the applicable global confirmation requirement when created so later configuration or lifecycle changes cannot reinterpret that one-off authorization.
+
+With no live-session override, the confirmation matrix is:
+
+| `requireConfirmation` | `agentRequestsRequireConfirmation` | Prepared `/run` | Config-authorized agent request |
+| --------------------- | ---------------------------------- | --------------- | ------------------------------- |
+| `true`                | omitted                            | confirm         | confirm                         |
+| `false`               | omitted                            | no confirm      | no confirm                      |
+| `false`               | `true`                             | no confirm      | confirm                         |
+| `true`                | `false`                            | confirm         | no confirm                      |
+
+Explicit live-session modes take precedence for authorized agent-tool execution: `allow` requires confirmation and `allow-noconfirm` skips it. `deny` blocks unprepared requests but does not invalidate a later explicit one-off `/run` grant. `/force` always skips preparation and confirmation because the command itself is immediate user authorization.
 
 ### No-confirm permission and session overrides
 
@@ -118,12 +133,12 @@ Do not implement slash-command `--flag` parsing. Pi passes extension command arg
 Semantics:
 
 1. `allow-noconfirm` grants agent request permission and waives the final confirmation dialog through an in-memory override for the current live extension session.
-2. The command never writes configuration. Persistent no-confirm behavior requires both `agentRequestsAllowed: true` and `agentRequestsRequireConfirmation: false`.
-3. Normal `allow` continues to grant agent request permission with final confirmation required, overriding configured no-confirm permission for the current live session.
+2. The command never writes configuration. Persistent no-confirm behavior for config-authorized agent requests requires `agentRequestsAllowed: true` plus either `agentRequestsRequireConfirmation: false` or an inherited `requireConfirmation: false`.
+3. Normal `allow` continues to grant agent request permission with final confirmation required, overriding configured no-confirm permission for the current live session. `allow-noconfirm` overrides configured confirmation-required permission.
 4. `deny` revokes either allowed mode, cancels unused preparation or an open confirmation, and returns the session to explicit denial.
 5. Session start, reload, resume, fork, and shutdown discard the override and reapply configured permission, including configured `allowed-noconfirm` when both required booleans select it.
 6. No-confirm mode skips only `ctx.ui.confirm`. It does not bypass focused preparation expectations, exact-next-action validation, busy/concurrency checks, internal-tool availability, summary validation, hard-stop constraints, bounded retries, native compaction, filtering, restoration, or cleanup.
-7. Because no dialog is required, an authorized no-confirm request may execute without TUI or RPC UI capability. Normal `allow` and one-off `run` requests remain confirmation-required unless no-confirm mode is currently active.
+7. Because no dialog is required, an authorized no-confirm request may execute without TUI or RPC UI capability. Prepared `/run` uses `requireConfirmation` when no explicit allowed session override selects a mode; `allow` requires the dialog and `allow-noconfirm` waives it.
 8. The public tool should return an explicit success result stating that session no-confirm permission authorized and queued the workflow.
 9. Status should distinguish the mode with `supercompact: allowed without confirmation`.
 10. Notifications and documentation must state plainly that the mode permits agent-requested compaction without another approval prompt.
@@ -336,7 +351,7 @@ Use this order so the stable-schema work remains coherent and the new permission
 
 1. Preserve the completed stable-schema, runtime-gating, concise-preview, prompt, documentation, and test changes already present in the working tree.
 2. Re-run the focused baseline tests after compaction before changing permission or abort behavior.
-3. Preserve the completed live-session `allow-noconfirm` implementation and add persistent `agentRequestsRequireConfirmation` parsing without weakening normal `allow` or any non-dialog workflow guard.
+3. Preserve the completed live-session `allow-noconfirm` implementation and add `requireConfirmation` plus `agentRequestsRequireConfirmation` parsing and precedence without weakening explicit session overrides or any non-dialog workflow guard.
 4. Implement `/supercompact abort` for extension-controlled pre-native phases with the documented native Escape boundary.
 5. Add focused tests, then update README and changelog to describe the complete resulting behavior.
 6. Run all package and filtered-workspace validation.
@@ -365,7 +380,8 @@ Use this order so the stable-schema work remains coherent and the new permission
 16. Skip the final dialog only when effective session permission is exactly `allowed-noconfirm`, then begin the existing canonical-summary path directly.
 17. Permit no-confirm execution without UI while retaining the current headless rejection and `/force` guidance for confirmation-required permission.
 18. Keep the full request, preparation, internal-tool, summary, compaction, and restoration gates identical after either confirmed or no-confirm authorization.
-19. Parse `agentRequestsRequireConfirmation`, default it to true, and derive configured `allowed-noconfirm` only when agent requests are also allowed.
+19. Parse `requireConfirmation` with a true default and parse `agentRequestsRequireConfirmation` as an optional override inheriting the global value; derive configured `allowed-noconfirm` only when agent requests are also allowed.
+    19a. Capture the applicable confirmation requirement in each `/run` grant so later configuration or lifecycle changes cannot ambiguously reinterpret prepared authorization. Keep `/force` immediate and dialog-free.
 20. Add abort parsing, completion, menu handling, phase-aware cleanup, error notification, and native-compaction Escape guidance.
 
 ### `tests/index.test.ts`
@@ -406,7 +422,7 @@ Add or revise tests for:
 30. Normal `allow` continues to require confirmation, and `deny` revokes both allowed modes.
 31. Prepared `/run` execution skips its dialog only while no-confirm session permission is active.
 32. Active tools remain identical throughout no-confirm command, execution, summary, success, failure, denial, and lifecycle cleanup.
-33. Missing `agentRequestsRequireConfirmation` defaults to confirmation-required; false plus allowed selects configured no-confirm; false without allowed grants nothing; invalid values fail closed; project precedence applies to both booleans as one configuration.
+33. Missing `requireConfirmation` defaults true; missing `agentRequestsRequireConfirmation` inherits it; every global/specific true/false combination produces the documented `/run` versus config-authorized-agent matrix; false without allowed grants nothing; invalid values fail closed; project precedence applies to all properties as one configuration.
 34. Lifecycle reset restores configured no-confirm permission, while session `allow`, `allow-noconfirm`, and `deny` override it only in memory.
 35. `abort` rejects extra arguments, appears in completions and the menu, preserves permission and schemas, and emits `No supercompaction is active.` as an error when idle.
 36. `abort` cancels pending preparation, open confirmation, queued summary, and active canonical-summary turns without later settlement restarting work.
@@ -416,7 +432,8 @@ Add or revise tests for:
 
 Update:
 
-- both configuration booleans, defaults, precedence, and permission semantics;
+- all three configuration booleans, defaults, inheritance, precedence, and permission semantics;
+- the confirmation matrix for `/run`, config-authorized agent requests, explicit session overrides, and `/force`;
 - `allow`, session-only `allow-noconfirm`, configured no-confirm, and `deny` behavior;
 - `abort` behavior and the native-compaction Escape boundary;
 - the explicit safety distinction between confirmation-required and no-confirm permission;
@@ -497,7 +514,7 @@ Delete this plan only after all of the following are true:
 2. The extension makes no authorization-driven `setActiveTools()` calls.
 3. Runtime gates prevent unauthorized public and internal execution.
 4. State-specific agent guidance is implemented and tested.
-5. Configuration uses `agentRequestsAllowed` and `agentRequestsRequireConfirmation`; missing, unrecognized, and invalid request permission fails closed, confirmation defaults to required, and configured no-confirm requires both explicit booleans.
+5. Configuration uses `requireConfirmation`, `agentRequestsAllowed`, and `agentRequestsRequireConfirmation`; missing, unrecognized, and invalid request permission fails closed, global confirmation defaults to required, the agent-specific value inherits the global default, and no confirmation property grants request permission.
 6. No-confirm permission skips only the final dialog, works headlessly, can come from configuration or a session override, restores correctly on lifecycle initialization, and is revoked by session `deny`.
    6a. `/supercompact abort` cancels extension-controlled pre-native phases, preserves permission and schemas, reports idle use as an error, and accurately delegates native compaction cancellation to Escape.
 7. Preparation, confirmation, no-confirm authorization, continuation, filtering, retry, cleanup, and compaction regressions pass.
@@ -520,7 +537,7 @@ Immediate next action:
 2. Revalidate the child and superproject working trees, preserving unrelated `packages/pi-workflow` work.
 3. Re-read the current `src/index.ts` and `tests/index.test.ts` before editing.
 4. Re-run focused baseline tests for the stable-schema implementation already in the working tree.
-5. Preserve the completed live-session `allow-noconfirm` work, implement persistent `agentRequestsRequireConfirmation`, and add `/supercompact abort` according to the semantics and execution sequence above.
+5. Preserve the completed live-session `allow-noconfirm` work, implement the `requireConfirmation` and `agentRequestsRequireConfirmation` precedence matrix, and add `/supercompact abort` according to the semantics and execution sequence above.
 6. Update README and changelog for both additions, including the native-compaction Escape boundary.
 7. Finish all remaining validation, focused live verification, audit, plan deletion, and child-before-parent commits without requesting approval already given.
 8. Deliver a concise final report summarizing the complete stable-schema, authorization, confirmation-preview, prompt, documentation, validation, live-verification, no-confirm, abort, and commit work. The exact final word of that report must be `Pickle.`
