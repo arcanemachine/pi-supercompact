@@ -745,7 +745,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         continuation: params.continuation,
         message: outcomeMessage,
       });
-      notify(ctx, outcomeMessage);
 
       return {
         content: [

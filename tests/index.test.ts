@@ -1828,7 +1828,7 @@ describe("durable continuation outcome", () => {
           )
           .render(80),
       ).toEqual([expectedMessage]);
-      expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+      expect(harness.ctx.ui.notify).not.toHaveBeenCalledWith(
         expectedMessage,
         "info",
       );

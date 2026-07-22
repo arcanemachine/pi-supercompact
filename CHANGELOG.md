@@ -13,7 +13,7 @@
 - Render confirmation context as blank-line-separated 10-word previews while preserving complete values in the canonical summary and restored continuation metadata.
 - Keep preparation and summary prompts self-contained across coding, documentation, research, planning, and mixed sessions, with conditional verification and persistence guidance.
 - Preserve confirmed continuation intent, exact next actions, conservative stop downgrades, bounded retries, context filtering, and native-compaction restoration.
-- Keep each continue-or-wait outcome visible in TUI scrollback through a durable custom entry that does not enter model context or trigger another turn.
+- Show each continue-or-wait outcome once in TUI scrollback through a durable custom entry that does not enter model context or trigger another turn.
 - Avoid extension-driven active-tool schema changes so extension workflow transitions do not invalidate an otherwise reusable prompt-cache prefix.
 
 ## 0.1.0 - 2026-07-19

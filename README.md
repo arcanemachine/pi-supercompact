@@ -171,7 +171,7 @@ After force, accepted confirmation, or an authorized no-confirm request, the ext
 
 During the dedicated summary turn, runtime guards block all other tools and reject internal calls outside the required workflow phase. Successful internal control calls are hidden from transcript presentation and terminate the turn without an acknowledgement round trip.
 
-When the decision is recorded, the extension both shows immediate notification feedback and appends the continue-or-wait outcome as a durable TUI transcript entry. The entry remains available in scrollback after the notification disappears. It is TUI-only session data: it does not enter model context, trigger another turn, or change the provider prompt prefix.
+When the decision is recorded, the extension shows the continue-or-wait outcome once as a durable TUI transcript entry. The entry remains available in scrollback instead of disappearing like a transient notification. It is TUI-only session data: it does not enter model context, trigger another turn, or change the provider prompt prefix.
 
 ### Summary contents
 
