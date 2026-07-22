@@ -539,8 +539,12 @@ function createId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function normalizeConfirmationValue(value: string): string {
+  return value.trim().split(/\s+/).filter(Boolean).join(" ");
+}
+
 export function previewConfirmationValue(value: string): string {
-  const words = value.trim().split(/\s+/).filter(Boolean);
+  const words = normalizeConfirmationValue(value).split(" ").filter(Boolean);
   const preview = words.slice(0, 10).join(" ");
   return words.length > 10 ? `${preview}…` : preview;
 }
@@ -553,7 +557,7 @@ export function buildConfirmationText(
     `Next action: ${previewConfirmationValue(preparation.nextAction)}`,
     ...(preparation.runExtraContext
       ? [
-          `Preparation context: ${previewConfirmationValue(preparation.runExtraContext)}`,
+          `Preparation context: ${normalizeConfirmationValue(preparation.runExtraContext)}`,
         ]
       : []),
     ...(preparation.agentExtraContext

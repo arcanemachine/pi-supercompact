@@ -1127,7 +1127,7 @@ describe("final confirmation", () => {
     );
   });
 
-  it("27a. confirmation truncates display values but preserves canonical values", async () => {
+  it("27a. confirmation keeps user preparation context complete while truncating agent values", async () => {
     const runContext =
       "one   two three\nfour five six seven eight nine ten eleven twelve";
     const nextAction =
@@ -1143,7 +1143,7 @@ describe("final confirmation", () => {
       "Next action: alpha beta gamma delta epsilon zeta eta theta iota kappa…",
     );
     expect(dialog).toContain(
-      "Preparation context: one two three four five six seven eight nine ten…",
+      "Preparation context: one two three four five six seven eight nine ten eleven twelve",
     );
     expect(dialog).toContain(
       "Additional summary context: red orange yellow green blue indigo violet black white gray…",
@@ -1928,7 +1928,7 @@ describe("summary helper contracts", () => {
     expect(restored).toContain("conservatively downgraded to stop");
   });
 
-  it("normalizes confirmation previews and truncates only after ten words", () => {
+  it("normalizes agent confirmation previews and truncates only after ten words", () => {
     expect(
       previewConfirmationValue(
         "  one\ttwo three\nfour five six seven eight nine ten  ",
@@ -1951,7 +1951,7 @@ describe("summary helper contracts", () => {
     ]);
   });
 
-  it("restores every full preparation value after truncated previews", async () => {
+  it("restores every full preparation value after confirmation rendering", async () => {
     const runExtraContext =
       "one two three four five six seven eight nine ten eleven twelve";
     const nextAction =

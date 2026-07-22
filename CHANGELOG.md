@@ -10,7 +10,7 @@
 - Support configured and explicit session no-confirm permission that skips only the final dialog, works headlessly, reapplies configured behavior on lifecycle initialization, and retains every preparation, validation, summary, retry, compaction, restoration, and cleanup guard.
 - Keep normal `allow` confirmation-required, retain immediate dialog-free `force`, and make `deny` revoke either live-session permission mode.
 - Cancel pending preparation, confirmation, and canonical-summary work through `abort`, preserve permission and schemas, report idle use as an error, and delegate active native-compaction cancellation to Escape or the host.
-- Render confirmation context as blank-line-separated 10-word previews while preserving complete values in the canonical summary and restored continuation metadata.
+- Render user preparation context completely in confirmation while limiting agent-created values to blank-line-separated 10-word previews; preserve every complete value in the canonical summary and restored continuation metadata.
 - Keep preparation and summary prompts self-contained across coding, documentation, research, planning, and mixed sessions, with conditional verification and persistence guidance.
 - Preserve confirmed continuation intent, exact next actions, conservative stop downgrades, bounded retries, context filtering, and native-compaction restoration.
 - Show each continue-or-wait outcome once in TUI scrollback through a durable custom entry that does not enter model context or trigger another turn.

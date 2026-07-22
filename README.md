@@ -154,7 +154,7 @@ The hidden preparation prompt asks the agent to:
 - verify or persist completed work when applicable and follow scoped rules;
 - establish `continue` or `stop` and one exact immediate next action.
 
-The confirmation dialog is a compact preview. Each displayed freeform value—the next action, preparation context, and additional summary context—is whitespace-normalized and limited to the first 10 words plus `…` when longer. Major blocks are separated by one blank line. The complete values remain unchanged in workflow state, the canonical summary prompt, restored context, and continuation metadata.
+The confirmation dialog keeps user-supplied preparation context complete while whitespace-normalizing it for display. Agent-created values—the next action and additional summary context—are whitespace-normalized and limited to the first 10 words plus `…` when longer. Major blocks are separated by one blank line. The complete values remain unchanged in workflow state, the canonical summary prompt, restored context, and continuation metadata.
 
 When confirmation is required, the extension locks it before opening the dialog and rechecks authorization afterward. Configured, prepared-run, or live-session no-confirm permission opens no dialog and begins the same guarded canonical-summary path directly. A confirmed or explicitly authorized `stop` is a hard constraint. A `continue` choice is permission, not a mandate: the summary decision may conservatively choose `stop` when work is complete, blocked, awaiting input, or uncertain.
 
