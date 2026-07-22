@@ -367,7 +367,7 @@ describe("commands and menu", () => {
 
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allowed without confirmation",
+      "supercompact: allow-noconfirm 🗜️ ",
     );
     await confirmPreparation(harness);
     expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
@@ -609,14 +609,14 @@ describe("configuration and live-session permission", () => {
     await harness.command().handler("allow-noconfirm", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allowed without confirmation",
+      "supercompact: allow-noconfirm 🗜️ ",
     );
 
     await harness.command().handler("deny", harness.ctx);
     await harness.command().handler("allow", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allowed",
+      "supercompact: allow 🗜️ ",
     );
   });
 
@@ -809,7 +809,7 @@ describe("session-only no-confirm permission", () => {
     });
     expect(harness.ctx.ui.setStatus).toHaveBeenCalledWith(
       "pi-supercompact",
-      "supercompact: allowed without confirmation",
+      "supercompact: allow-noconfirm 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
       "Supercompaction is proceeding under live-session no-confirm permission. No additional approval is required.",
@@ -1626,7 +1626,7 @@ describe("preserved workflow regressions", () => {
     await harness.command().handler("allow", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allowed",
+      "supercompact: allow 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
       expect.stringContaining("Execution remains unavailable"),
@@ -1635,7 +1635,7 @@ describe("preserved workflow regressions", () => {
     await harness.command().handler("allow-noconfirm", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allowed without confirmation",
+      "supercompact: allow-noconfirm 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
       expect.stringContaining("Execution remains unavailable"),

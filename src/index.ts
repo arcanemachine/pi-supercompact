@@ -590,9 +590,9 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         : preparationGrant && !preparationGrant.consumed
           ? "supercompact: preparing"
           : sessionPermissionOverride === "allowed-noconfirm"
-            ? "supercompact: allowed without confirmation"
+            ? "supercompact: allow-noconfirm 🗜️ "
             : sessionPermissionOverride === "allowed"
-              ? "supercompact: allowed"
+              ? "supercompact: allow 🗜️ "
               : undefined;
     ctx.ui.setStatus(STATUS_KEY, status);
   };
