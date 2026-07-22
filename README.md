@@ -189,12 +189,17 @@ Relevant resources are grouped by work horizon. Exact file paths remain availabl
 
 When Pi is idle, preparation and summary messages trigger an immediate steering turn. While Pi is responding, they are queued with steering semantics so the current tool batch finishes first.
 
-Status text is shown only when useful:
+Operational status text is shown while the extension is preparing or awaiting confirmation:
 
 - `supercompact: preparing`
 - `supercompact: awaiting confirmation`
+
+Explicit live-session permission overrides add one of these status items:
+
 - `supercompact: allowed`
 - `supercompact: allowed without confirmation`
+
+Configured permission is intentionally silent in the status area. `/deny` clears any live-session permission status, while a later `/allow` or `/allow-noconfirm` displays the new explicit override.
 
 `run`, `allow`, `allow-noconfirm`, `deny`, `abort`, confirmation, no-confirm execution, summary entry, settlement, and cleanup do not change the extension's active tool vector. This removes extension-caused mid-session schema invalidation and preserves an otherwise reusable prompt-cache prefix.
 

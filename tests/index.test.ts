@@ -590,6 +590,36 @@ describe("configuration and live-session permission", () => {
     expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
   });
 
+  it("shows permission status only for explicit live-session overrides", async () => {
+    const harness = createHarness({
+      globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
+    });
+
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      undefined,
+    );
+
+    await harness.command().handler("deny", harness.ctx);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      undefined,
+    );
+
+    await harness.command().handler("allow-noconfirm", harness.ctx);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allowed without confirmation",
+    );
+
+    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("allow", harness.ctx);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allowed",
+    );
+  });
+
   it("applies the global and agent-specific confirmation matrix", async () => {
     const cases = [
       {
@@ -845,7 +875,7 @@ describe("session-only no-confirm permission", () => {
     );
   });
 
-  it("discards no-confirm mode on lifecycle initialization", async () => {
+  it("discards session mode without surfacing configured permission on lifecycle initialization", async () => {
     const harness = createHarness({
       globalConfig: '{"agentRequestsAllowed":true,"unrecognized":true}',
     });
@@ -855,9 +885,9 @@ describe("session-only no-confirm permission", () => {
     await confirmPreparation(harness);
 
     expect(harness.ctx.ui.confirm).toHaveBeenCalledOnce();
-    expect(harness.ctx.ui.setStatus).toHaveBeenCalledWith(
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allowed",
+      undefined,
     );
 
     const shutdown = createHarness({
@@ -867,7 +897,7 @@ describe("session-only no-confirm permission", () => {
     shutdown.handlers.get("session_shutdown")?.({}, shutdown.ctx);
     expect(shutdown.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allowed",
+      undefined,
     );
   });
 

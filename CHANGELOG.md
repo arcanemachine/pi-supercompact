@@ -14,6 +14,7 @@
 - Keep preparation and summary prompts self-contained across coding, documentation, research, planning, and mixed sessions, with conditional verification and persistence guidance.
 - Preserve confirmed continuation intent, exact next actions, conservative stop downgrades, bounded retries, context filtering, and native-compaction restoration.
 - Show each continue-or-wait outcome once in TUI scrollback through a durable custom entry that does not enter model context or trigger another turn.
+- Keep configured permission silent in the status area and show permission status only for explicit live-session overrides.
 - Avoid extension-driven active-tool schema changes so extension workflow transitions do not invalidate an otherwise reusable prompt-cache prefix.
 
 ## 0.1.0 - 2026-07-19

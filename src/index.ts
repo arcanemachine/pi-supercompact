@@ -589,9 +589,9 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         ? "supercompact: awaiting confirmation"
         : preparationGrant && !preparationGrant.consumed
           ? "supercompact: preparing"
-          : effectivePermission() === "allowed-noconfirm"
+          : sessionPermissionOverride === "allowed-noconfirm"
             ? "supercompact: allowed without confirmation"
-            : effectivePermission() === "allowed"
+            : sessionPermissionOverride === "allowed"
               ? "supercompact: allowed"
               : undefined;
     ctx.ui.setStatus(STATUS_KEY, status);
