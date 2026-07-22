@@ -1033,7 +1033,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         );
         notify(
           ctx,
-          `${authorizationSubject} authorized agent-requested supercompaction without another approval prompt.`,
+          `Supercompaction is proceeding under ${noConfirmAuthorizationLabel(authorization.noConfirmAuthorization!)}. No additional approval is required.`,
         );
         return {
           content: [
