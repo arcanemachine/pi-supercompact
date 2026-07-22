@@ -2,9 +2,11 @@ import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import extension, {
+  buildConfirmationText,
   buildContinuationMessage,
   buildPreparationPrompt,
   buildSummaryPrompt,
+  previewConfirmationValue,
 } from "../src/index.js";
 
 vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
@@ -16,6 +18,7 @@ type Handler = (event: any, ctx: any) => any;
 const PREPARATION_REQUEST_TYPE = "pi-supercompact:preparation-request";
 const SUMMARY_REQUEST_TYPE = "pi-supercompact:summary-request";
 const CONTEXT_MESSAGE_TYPE = "pi-supercompact:context";
+const CONTINUATION_OUTCOME_ENTRY_TYPE = "pi-supercompact:continuation-outcome";
 const DECISION_TOOL_NAME = "record_supercompact_decision";
 const AGENT_TOOL_NAME = "supercompact";
 const PROJECT_CWD = "/workspace/test-project";
@@ -51,6 +54,7 @@ function createHarness(options: HarnessOptions = {}) {
 
   const handlers = new Map<string, Handler>();
   let command: any;
+  let entryRenderer: any;
   const tools = new Map<string, any>();
   let activeTools = ["read", "bash"];
   const sendMessage = vi.fn();
@@ -73,6 +77,10 @@ function createHarness(options: HarnessOptions = {}) {
         activeTools = activeTools.filter((name) => name !== value.name);
       }
     }),
+    registerEntryRenderer: vi.fn((_customType: string, renderer: any) => {
+      entryRenderer = renderer;
+    }),
+    appendEntry: vi.fn(),
     getActiveTools: vi.fn(() => [...activeTools]),
     setActiveTools: vi.fn((toolNames: string[]) => {
       activeTools = toolNames.filter(
@@ -124,6 +132,11 @@ function createHarness(options: HarnessOptions = {}) {
       return tool;
     },
     activeTools: () => [...activeTools],
+    excludeTool: (toolName: string) => {
+      activeTools = activeTools.filter((name) => name !== toolName);
+    },
+    registeredTools: () => [...tools.values()],
+    entryRenderer: () => entryRenderer,
     messages: (customType: string) =>
       sendMessage.mock.calls
         .map(([message]) => message)
@@ -326,6 +339,9 @@ beforeEach(() => vi.clearAllMocks());
 describe("commands and menu", () => {
   it("1. bare command opens the new menu", async () => {
     const harness = createHarness();
+    expect(harness.command().description).toBe(
+      "Prepare or force supercompaction; manage request permission or abort",
+    );
     harness.ctx.ui.select.mockResolvedValue(undefined);
 
     await harness.command().handler("", harness.ctx);
@@ -333,10 +349,28 @@ describe("commands and menu", () => {
     expect(harness.ctx.ui.select).toHaveBeenCalledWith("Supercompact", [
       "Run pre-compaction wrap",
       "Force supercompaction now",
-      "Allow agent supercompaction requests for this session",
-      "Forbid agent supercompaction requests for this session",
+      "Allow agent requests with confirmation for this session",
+      "Allow agent requests without confirmation for this session",
+      "Deny agent supercompaction requests for this session",
+      "Abort active pre-native supercompaction",
       "Cancel",
     ]);
+  });
+
+  it("selecting no-confirm in the menu enables the distinct session mode", async () => {
+    const harness = createHarness();
+    harness.ctx.ui.select.mockResolvedValue(
+      "Allow agent requests without confirmation for this session",
+    );
+
+    await harness.command().handler("", harness.ctx);
+
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allowed without confirmation",
+    );
+    await confirmPreparation(harness);
+    expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
   });
 
   it("2. menu run opens the editor and starts preparation only", async () => {
@@ -384,13 +418,15 @@ describe("commands and menu", () => {
     );
   });
 
-  it("6. completion exposes only run, force, allow, and forbid", () => {
+  it("6. completion exposes every supported positional command", () => {
     const harness = createHarness();
     expect(harness.command().getArgumentCompletions("")).toEqual(
-      ["run", "force", "allow", "forbid"].map((value) => ({
-        value,
-        label: value,
-      })),
+      ["run", "force", "allow", "allow-noconfirm", "deny", "abort"].map(
+        (value) => ({
+          value,
+          label: value,
+        }),
+      ),
     );
   });
 
@@ -400,14 +436,16 @@ describe("commands and menu", () => {
       "enable",
       "disable",
       "allow extra",
-      "forbid extra",
+      "allow-noconfirm extra",
+      "deny extra",
+      "abort extra",
       "legacy bare context",
     ]) {
       await harness.command().handler(command, harness.ctx);
     }
     expect(harness.pi.sendMessage).not.toHaveBeenCalled();
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
-      "Usage: /supercompact [run [extra context] | force [extra context] | allow | forbid]",
+      "Usage: /supercompact [run [extra context] | force [extra context] | allow | allow-noconfirm | deny | abort]",
       "error",
     );
   });
@@ -423,104 +461,456 @@ describe("commands and menu", () => {
   });
 });
 
-describe("configuration and live-session policy", () => {
-  it("9. missing config defaults to forbidden", async () => {
+describe("configuration and live-session permission", () => {
+  it("9. missing config defaults to denied while both schemas stay active", async () => {
     const harness = createHarness();
-    expect(harness.activeTools()).toEqual(["read", "bash"]);
-    await expect(
-      harness
-        .agentTool()
-        .execute("agent-1", publicParams(), undefined, undefined, harness.ctx),
-    ).rejects.toThrow("not authorized");
+    expect(harness.activeTools()).toEqual([
+      "read",
+      "bash",
+      DECISION_TOOL_NAME,
+      AGENT_TOOL_NAME,
+    ]);
+    await expect(confirmPreparation(harness)).rejects.toThrow(
+      /\/supercompact run for a prepared one-off request.*\/supercompact allow.*\/supercompact allow-noconfirm/,
+    );
   });
 
-  it("10. global true and false are respected", () => {
-    expect(
-      createHarness({
-        globalConfig: '{"agentToolEnabled":true}',
-      }).activeTools(),
-    ).toContain(AGENT_TOOL_NAME);
-    expect(
-      createHarness({
-        globalConfig: '{"agentToolEnabled":false}',
-      }).activeTools(),
-    ).not.toContain(AGENT_TOOL_NAME);
-  });
-
-  it("11. trusted project config overrides global config", () => {
-    const enabled = createHarness({
-      globalConfig: '{"agentToolEnabled":false}',
-      projectConfig: '{"agentToolEnabled":true}',
+  it("10. global true and false control permission, not schemas", async () => {
+    const allowed = createHarness({
+      globalConfig: '{"agentRequestsAllowed":true}',
     });
-    const disabled = createHarness({
-      globalConfig: '{"agentToolEnabled":true}',
-      projectConfig: '{"agentToolEnabled":false}',
+    const denied = createHarness({
+      globalConfig: '{"agentRequestsAllowed":false}',
     });
-    expect(enabled.activeTools()).toContain(AGENT_TOOL_NAME);
-    expect(disabled.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    expect(allowed.activeTools()).toEqual(denied.activeTools());
+    await expect(confirmPreparation(allowed)).resolves.toMatchObject({
+      details: { status: "queued" },
+    });
+    await expect(confirmPreparation(denied)).rejects.toThrow("not authorized");
   });
 
-  it("12. untrusted project config is ignored", () => {
+  it("11. trusted project permission overrides global permission", async () => {
+    const allowed = createHarness({
+      globalConfig: '{"agentRequestsAllowed":false}',
+      projectConfig: '{"agentRequestsAllowed":true}',
+    });
+    const denied = createHarness({
+      globalConfig: '{"agentRequestsAllowed":true}',
+      projectConfig: '{"agentRequestsAllowed":false}',
+    });
+    await expect(confirmPreparation(allowed)).resolves.toMatchObject({
+      details: { status: "queued" },
+    });
+    await expect(confirmPreparation(denied)).rejects.toThrow("not authorized");
+    expect(allowed.activeTools()).toEqual(denied.activeTools());
+  });
+
+  it("12. untrusted project config is ignored", async () => {
     const harness = createHarness({
-      globalConfig: '{"agentToolEnabled":true}',
-      projectConfig: '{"agentToolEnabled":false}',
+      globalConfig: '{"agentRequestsAllowed":true}',
+      projectConfig: '{"agentRequestsAllowed":false}',
       projectTrusted: false,
     });
-    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
+    await expect(confirmPreparation(harness)).resolves.toMatchObject({
+      details: { status: "queued" },
+    });
   });
 
-  it("13. invalid config fails closed", () => {
-    const harness = createHarness({
-      globalConfig: '{"agentToolEnabled":true}',
-      projectConfig: '{"agentToolEnabled":"yes"}',
+  it("13. invalid and unrecognized permission config fail closed", async () => {
+    const invalid = createHarness({
+      globalConfig: '{"agentRequestsAllowed":true}',
+      projectConfig: '{"agentRequestsAllowed":"yes"}',
     });
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
-    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+    const unrecognized = createHarness({
+      globalConfig: '{"unrecognizedPermission":true}',
+    });
+    await expect(confirmPreparation(invalid)).rejects.toThrow("not authorized");
+    await expect(confirmPreparation(unrecognized)).rejects.toThrow(
+      "not authorized",
+    );
+    expect(invalid.ctx.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("Ignoring invalid supercompact config"),
       "warning",
     );
+    expect(invalid.activeTools()).toEqual(unrecognized.activeTools());
   });
 
   it("14. allow overrides configured false only in memory", async () => {
     const harness = createHarness({
-      globalConfig: '{"agentToolEnabled":false}',
+      globalConfig: '{"agentRequestsAllowed":false}',
     });
     const reads = readFileSyncMock.mock.calls.length;
     await harness.command().handler("allow", harness.ctx);
-    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
     expect(readFileSyncMock.mock.calls).toHaveLength(reads);
+    await expect(confirmPreparation(harness)).resolves.toMatchObject({
+      details: { status: "queued" },
+    });
   });
 
-  it("15. forbid overrides configured true only in memory", async () => {
+  it("15. deny overrides configured true only in memory", async () => {
     const harness = createHarness({
-      globalConfig: '{"agentToolEnabled":true}',
+      globalConfig: '{"agentRequestsAllowed":true}',
     });
     const reads = readFileSyncMock.mock.calls.length;
-    await harness.command().handler("forbid", harness.ctx);
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    await harness.command().handler("deny", harness.ctx);
     expect(readFileSyncMock.mock.calls).toHaveLength(reads);
+    await expect(confirmPreparation(harness)).rejects.toThrow(
+      "explicitly denied",
+    );
   });
 
   it("16. session initialization discards overrides and reapplies config", async () => {
     const harness = createHarness({
-      globalConfig: '{"agentToolEnabled":true}',
+      globalConfig: '{"agentRequestsAllowed":true}',
     });
-    await harness.command().handler("forbid", harness.ctx);
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    await harness.command().handler("deny", harness.ctx);
+    await expect(confirmPreparation(harness)).rejects.toThrow(
+      "explicitly denied",
+    );
     harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
-    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
+    await expect(confirmPreparation(harness)).resolves.toMatchObject({
+      details: { status: "queued" },
+    });
   });
 
-  it("17. repeated allow and forbid are idempotent without duplicate tools", async () => {
+  it("17. repeated allow and deny keep stable, unique schemas", async () => {
     const harness = createHarness();
+    const initialTools = harness.activeTools();
     await harness.command().handler("allow", harness.ctx);
     await harness.command().handler("allow", harness.ctx);
+    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("deny", harness.ctx);
+    expect(harness.activeTools()).toEqual(initialTools);
     expect(
       harness.activeTools().filter((name) => name === AGENT_TOOL_NAME),
     ).toHaveLength(1);
-    await harness.command().handler("forbid", harness.ctx);
-    await harness.command().handler("forbid", harness.ctx);
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    expect(
+      harness.activeTools().filter((name) => name === DECISION_TOOL_NAME),
+    ).toHaveLength(1);
+    expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
+  });
+
+  it("applies the global and agent-specific confirmation matrix", async () => {
+    const cases = [
+      {
+        config: '{"agentRequestsAllowed":true}',
+        expectsConfirmation: true,
+      },
+      {
+        config: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
+        expectsConfirmation: false,
+      },
+      {
+        config:
+          '{"requireConfirmation":false,"agentRequestsAllowed":true,"agentRequestsRequireConfirmation":true}',
+        expectsConfirmation: true,
+      },
+      {
+        config:
+          '{"requireConfirmation":true,"agentRequestsAllowed":true,"agentRequestsRequireConfirmation":false}',
+        expectsConfirmation: false,
+      },
+    ];
+
+    for (const { config, expectsConfirmation } of cases) {
+      const harness = createHarness({ globalConfig: config });
+      const result = await confirmPreparation(harness);
+      expect(harness.ctx.ui.confirm.mock.calls.length > 0).toBe(
+        expectsConfirmation,
+      );
+      if (!expectsConfirmation) {
+        expect(result.details.authorization).toBe("configured-no-confirm");
+      }
+    }
+  });
+
+  it("uses the global confirmation setting for prepared runs", async () => {
+    const noConfirm = createHarness({
+      hasUI: false,
+      globalConfig:
+        '{"requireConfirmation":false,"agentRequestsAllowed":true,"agentRequestsRequireConfirmation":true}',
+    });
+    await beginPreparation(noConfirm);
+    const noConfirmResult = await confirmPreparation(noConfirm);
+    expect(noConfirm.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(noConfirmResult.details.authorization).toBe("prepared-no-confirm");
+
+    const confirm = createHarness({
+      globalConfig:
+        '{"requireConfirmation":true,"agentRequestsAllowed":true,"agentRequestsRequireConfirmation":false}',
+    });
+    await beginPreparation(confirm);
+    await confirmPreparation(confirm);
+    expect(confirm.ctx.ui.confirm).toHaveBeenCalledOnce();
+  });
+
+  it("lets confirmation-only config govern run without granting requests", async () => {
+    const harness = createHarness({
+      hasUI: false,
+      globalConfig: '{"requireConfirmation":false}',
+    });
+    await expect(confirmPreparation(harness)).rejects.toThrow("not authorized");
+    await beginPreparation(harness);
+    await expect(confirmPreparation(harness)).resolves.toMatchObject({
+      details: { authorization: "prepared-no-confirm" },
+    });
+  });
+
+  it("treats trusted project configuration as one overriding policy", async () => {
+    const harness = createHarness({
+      globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
+      projectConfig: '{"requireConfirmation":true}',
+    });
+    await expect(confirmPreparation(harness)).rejects.toThrow("not authorized");
+    await beginPreparation(harness);
+    await confirmPreparation(harness);
+    expect(harness.ctx.ui.confirm).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed for invalid confirmation settings", async () => {
+    for (const invalidProperty of [
+      "requireConfirmation",
+      "agentRequestsRequireConfirmation",
+    ]) {
+      const harness = createHarness({
+        globalConfig: JSON.stringify({
+          agentRequestsAllowed: true,
+          [invalidProperty]: "no",
+        }),
+      });
+      await expect(confirmPreparation(harness)).rejects.toThrow(
+        "not authorized",
+      );
+      expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining(`${invalidProperty} must be true or false`),
+        "warning",
+      );
+    }
+  });
+
+  it("restores configured no-confirm after session overrides", async () => {
+    const harness = createHarness({
+      globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
+    });
+    await harness.command().handler("allow", harness.ctx);
+    harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
+    const result = await confirmPreparation(harness);
+    expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(result.details.authorization).toBe("configured-no-confirm");
+  });
+
+  it("lets explicit session modes override configured confirmation", async () => {
+    const require = createHarness({
+      globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
+    });
+    await require.command().handler("allow", require.ctx);
+    await confirmPreparation(require);
+    expect(require.ctx.ui.confirm).toHaveBeenCalledOnce();
+
+    const waive = createHarness({
+      globalConfig: '{"requireConfirmation":true,"agentRequestsAllowed":true}',
+    });
+    await waive.command().handler("allow-noconfirm", waive.ctx);
+    await confirmPreparation(waive);
+    expect(waive.ctx.ui.confirm).not.toHaveBeenCalled();
+
+    const preparedWaive = createHarness({
+      globalConfig: '{"requireConfirmation":true}',
+    });
+    await beginPreparation(preparedWaive);
+    await preparedWaive.command().handler("allow-noconfirm", preparedWaive.ctx);
+    await confirmPreparation(preparedWaive);
+    expect(preparedWaive.ctx.ui.confirm).not.toHaveBeenCalled();
+
+    const preparedRequire = createHarness({
+      globalConfig: '{"requireConfirmation":false}',
+    });
+    await beginPreparation(preparedRequire);
+    await preparedRequire.command().handler("allow", preparedRequire.ctx);
+    await confirmPreparation(preparedRequire);
+    expect(preparedRequire.ctx.ui.confirm).toHaveBeenCalledOnce();
+
+    const configuredDenied = createHarness({
+      hasUI: false,
+      globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
+    });
+    await configuredDenied.command().handler("deny", configuredDenied.ctx);
+    await expect(confirmPreparation(configuredDenied)).rejects.toThrow(
+      "explicitly denied",
+    );
+    expect(configuredDenied.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
+
+    const oneOff = createHarness({
+      hasUI: false,
+      globalConfig: '{"requireConfirmation":false}',
+    });
+    await oneOff.command().handler("deny", oneOff.ctx);
+    await beginPreparation(oneOff);
+    await expect(confirmPreparation(oneOff)).resolves.toMatchObject({
+      details: { authorization: "prepared-no-confirm" },
+    });
+  });
+});
+
+describe("session-only no-confirm permission", () => {
+  it("allows requests without a dialog and reports the authorization", async () => {
+    const harness = createHarness();
+    const initialTools = harness.activeTools();
+    const reads = readFileSyncMock.mock.calls.length;
+
+    await harness.command().handler("allow-noconfirm", harness.ctx);
+    const result = await confirmPreparation(harness);
+
+    expect(readFileSyncMock.mock.calls).toHaveLength(reads);
+    expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)[0].content).toContain(
+      "Explicit live-session no-confirm permission authorized",
+    );
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)[0].content).not.toContain(
+      "Agent-supplied summary emphasis confirmed by the user",
+    );
+    expect(result.content[0].text).toMatch(
+      /live-session no-confirm permission.*without a confirmation dialog/i,
+    );
+    expect(result.details).toMatchObject({
+      status: "queued",
+      authorization: "session-no-confirm",
+    });
+    expect(harness.ctx.ui.setStatus).toHaveBeenCalledWith(
+      "pi-supercompact",
+      "supercompact: allowed without confirmation",
+    );
+    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("without another approval prompt"),
+      "info",
+    );
+    expect(harness.activeTools()).toEqual(initialTools);
+    expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
+  });
+
+  it("works headlessly while retaining validation and workflow gates", async () => {
+    const headless = createHarness({ hasUI: false });
+    await headless.command().handler("allow-noconfirm", headless.ctx);
+    await expect(confirmPreparation(headless)).resolves.toMatchObject({
+      details: { authorization: "session-no-confirm" },
+    });
+    expect(headless.ctx.ui.confirm).not.toHaveBeenCalled();
+
+    const empty = createHarness({ hasUI: false });
+    await empty.command().handler("allow-noconfirm", empty.ctx);
+    await expect(
+      confirmPreparation(empty, { nextAction: "   " }),
+    ).rejects.toThrow("Supply one concrete next action");
+
+    const busy = createHarness({ hasUI: false });
+    await busy.command().handler("allow-noconfirm", busy.ctx);
+    await confirmPreparation(busy);
+    await expect(confirmPreparation(busy)).rejects.toThrow(
+      "already in progress",
+    );
+
+    const unavailable = createHarness({
+      hasUI: false,
+      allowDecisionTool: false,
+    });
+    await unavailable.command().handler("allow-noconfirm", unavailable.ctx);
+    await expect(confirmPreparation(unavailable)).rejects.toThrow(
+      "internal decision tool",
+    );
+  });
+
+  it("keeps normal allow confirmation-required and deny revokes both modes", async () => {
+    const allowed = createHarness();
+    await allowed.command().handler("allow-noconfirm", allowed.ctx);
+    await allowed.command().handler("allow", allowed.ctx);
+    await confirmPreparation(allowed);
+    expect(allowed.ctx.ui.confirm).toHaveBeenCalledOnce();
+
+    const deniedNoConfirm = createHarness();
+    await deniedNoConfirm
+      .command()
+      .handler("allow-noconfirm", deniedNoConfirm.ctx);
+    await deniedNoConfirm.command().handler("deny", deniedNoConfirm.ctx);
+    await expect(confirmPreparation(deniedNoConfirm)).rejects.toThrow(
+      "explicitly denied",
+    );
+    expect(deniedNoConfirm.ctx.ui.confirm).not.toHaveBeenCalled();
+
+    const deniedAllowed = createHarness();
+    await deniedAllowed.command().handler("allow", deniedAllowed.ctx);
+    await deniedAllowed.command().handler("deny", deniedAllowed.ctx);
+    await expect(confirmPreparation(deniedAllowed)).rejects.toThrow(
+      "explicitly denied",
+    );
+  });
+
+  it("discards no-confirm mode on lifecycle initialization", async () => {
+    const harness = createHarness({
+      globalConfig: '{"agentRequestsAllowed":true,"unrecognized":true}',
+    });
+    await harness.command().handler("allow-noconfirm", harness.ctx);
+    harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
+
+    await confirmPreparation(harness);
+
+    expect(harness.ctx.ui.confirm).toHaveBeenCalledOnce();
+    expect(harness.ctx.ui.setStatus).toHaveBeenCalledWith(
+      "pi-supercompact",
+      "supercompact: allowed",
+    );
+
+    const shutdown = createHarness({
+      globalConfig: '{"agentRequestsAllowed":true}',
+    });
+    await shutdown.command().handler("allow-noconfirm", shutdown.ctx);
+    shutdown.handlers.get("session_shutdown")?.({}, shutdown.ctx);
+    expect(shutdown.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allowed",
+    );
+  });
+
+  it("lets prepared run skip its dialog only while no-confirm is active", async () => {
+    const noConfirm = createHarness({ hasUI: false });
+    await noConfirm.command().handler("allow-noconfirm", noConfirm.ctx);
+    await beginPreparation(noConfirm, "preserve this context");
+    await confirmPreparation(noConfirm);
+    expect(noConfirm.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(noConfirm.messages(SUMMARY_REQUEST_TYPE)[0].content).toContain(
+      "preserve this context",
+    );
+
+    const normal = createHarness();
+    await normal.command().handler("allow", normal.ctx);
+    await beginPreparation(normal);
+    await confirmPreparation(normal);
+    expect(normal.ctx.ui.confirm).toHaveBeenCalledOnce();
+  });
+
+  it("keeps schemas stable through no-confirm settlement and denial", async () => {
+    const harness = createHarness();
+    const initialTools = harness.activeTools();
+    await harness.command().handler("allow-noconfirm", harness.ctx);
+    await confirmPreparation(harness);
+    const summary = harness.messages(SUMMARY_REQUEST_TYPE)[0];
+    harness.handlers.get("message_end")?.(customMessage(summary), harness.ctx);
+    await harness.command().handler("deny", harness.ctx);
+    await compactSuccessfully(harness);
+    const restored = harness.messages(CONTEXT_MESSAGE_TYPE)[0];
+    expect(restored.details.preparation.authorization).toBe(
+      "session-no-confirm",
+    );
+    expect(restored.content).toContain(
+      "Authorization: live-session no-confirm permission",
+    );
+    await expect(confirmPreparation(harness)).rejects.toThrow(
+      "explicitly denied",
+    );
+    harness.handlers.get("session_shutdown")?.({}, harness.ctx);
+
+    expect(harness.activeTools()).toEqual(initialTools);
+    expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
   });
 });
 
@@ -528,9 +918,9 @@ describe("preparation", () => {
   it("18. run creates one grant and sends focused idle steering", async () => {
     const harness = createHarness();
     const message = await beginPreparation(harness);
-    expect(message.content).toContain("focused pre-compaction wrap");
-    expect(message.content).toContain("Freshen the active context");
-    expect(message.content).toContain("Wrap the active boundary");
+    expect(message.content).toContain("focused pre-compaction checkpoint");
+    expect(message.content).toContain("Refresh relevant context");
+    expect(message.content).toContain("Close the active boundary");
     expect(harness.messageCalls(PREPARATION_REQUEST_TYPE)[0][1]).toEqual({
       triggerTurn: true,
       deliverAs: "steer",
@@ -582,27 +972,38 @@ describe("preparation", () => {
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
   });
 
-  it("23. forbid cancels an unused preparation grant", async () => {
+  it("23. deny cancels an unused preparation grant without changing schemas", async () => {
     const harness = createHarness();
+    const initialTools = harness.activeTools();
     await beginPreparation(harness);
-    await harness.command().handler("forbid", harness.ctx);
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    await harness.command().handler("deny", harness.ctx);
+    expect(harness.activeTools()).toEqual(initialTools);
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
       "Pending pre-compaction preparation was canceled.",
       "info",
+    );
+    await expect(confirmPreparation(harness)).rejects.toThrow(
+      "explicitly denied",
     );
   });
 
   it("24. session lifecycle clears preparation and confirmation state", async () => {
     const harness = createHarness();
     await beginPreparation(harness);
-    const confirmation = deferred<boolean>();
-    harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
+    harness.ctx.ui.confirm.mockImplementationOnce(
+      (_title: string, _message: string, options: { signal: AbortSignal }) =>
+        new Promise<boolean>((_resolve, reject) =>
+          options.signal.addEventListener(
+            "abort",
+            () => reject(new Error("session replaced")),
+            { once: true },
+          ),
+        ),
+    );
     const pending = confirmPreparation(harness);
     harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
-    confirmation.resolve(true);
     expect((await pending).details.status).toBe("revoked");
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
       "Pending pre-compaction preparation was canceled.",
       "info",
@@ -611,7 +1012,7 @@ describe("preparation", () => {
     const shutdown = createHarness();
     await beginPreparation(shutdown);
     shutdown.handlers.get("session_shutdown")?.({}, shutdown.ctx);
-    expect(shutdown.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    expect(shutdown.activeTools()).toContain(AGENT_TOOL_NAME);
     expect(shutdown.ctx.ui.notify).toHaveBeenCalledWith(
       "Pending pre-compaction preparation was canceled.",
       "info",
@@ -641,7 +1042,7 @@ describe("preparation", () => {
 });
 
 describe("final confirmation", () => {
-  it("26. agent calls are rejected while forbidden without a grant", async () => {
+  it("26. agent calls are rejected while denied without a grant", async () => {
     const harness = createHarness();
     await expect(confirmPreparation(harness)).rejects.toThrow("not authorized");
   });
@@ -656,11 +1057,45 @@ describe("final confirmation", () => {
     });
     expect(harness.ctx.ui.confirm).toHaveBeenCalledWith(
       "Confirm agent-requested supercompaction",
-      expect.stringMatching(
-        /stop and wait[\s\S]*Wait for the user[\s\S]*run detail[\s\S]*summary detail[\s\S]*native compaction/i,
-      ),
+      [
+        "Post-compaction behavior: stop and wait",
+        "Next action: Wait for the user.",
+        "Preparation context: run detail",
+        "Additional summary context: summary detail",
+        "Confirming will begin the canonical super-summary and native compaction immediately.",
+      ].join("\n\n"),
       { signal: expect.any(AbortSignal) },
     );
+  });
+
+  it("27a. confirmation truncates display values but preserves canonical values", async () => {
+    const runContext =
+      "one   two three\nfour five six seven eight nine ten eleven twelve";
+    const nextAction =
+      "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    const extraContext =
+      "red orange yellow green blue indigo violet black white gray silver gold";
+    const harness = createHarness();
+    await beginPreparation(harness, runContext);
+    await confirmPreparation(harness, { nextAction, extraContext });
+
+    const dialog = harness.ctx.ui.confirm.mock.calls[0][1];
+    expect(dialog).toContain(
+      "Next action: alpha beta gamma delta epsilon zeta eta theta iota kappa…",
+    );
+    expect(dialog).toContain(
+      "Preparation context: one two three four five six seven eight nine ten…",
+    );
+    expect(dialog).toContain(
+      "Additional summary context: red orange yellow green blue indigo violet black white gray…",
+    );
+    expect(dialog.split("\n\n")).toHaveLength(5);
+    expect(dialog).not.toContain("\n\n\n");
+
+    const summaryPrompt = harness.messages(SUMMARY_REQUEST_TYPE)[0].content;
+    expect(summaryPrompt).toContain(nextAction);
+    expect(summaryPrompt).toContain(runContext);
+    expect(summaryPrompt).toContain(extraContext);
   });
 
   it("28. confirmation acceptance starts exactly one summary", async () => {
@@ -680,11 +1115,13 @@ describe("final confirmation", () => {
     expect(harness.ctx.compact).not.toHaveBeenCalled();
   });
 
-  it("30. declining a prepared one-shot clears it and removes the tool", async () => {
+  it("30. declining a prepared one-shot clears its grant without changing schemas", async () => {
     const harness = createHarness({ confirmed: false });
+    const initialTools = harness.activeTools();
     await beginPreparation(harness);
     await confirmPreparation(harness);
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    expect(harness.activeTools()).toEqual(initialTools);
+    await expect(confirmPreparation(harness)).rejects.toThrow("not authorized");
   });
 
   it("31. decline under session allow retains policy and directs waiting", async () => {
@@ -699,10 +1136,10 @@ describe("final confirmation", () => {
   it("32. confirmation fails closed without UI", async () => {
     const harness = createHarness({
       hasUI: false,
-      globalConfig: '{"agentToolEnabled":true}',
+      globalConfig: '{"agentRequestsAllowed":true}',
     });
     await expect(confirmPreparation(harness)).rejects.toThrow(
-      "requires confirmation",
+      /requires TUI or RPC confirmation.*\/supercompact force explicitly/,
     );
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
   });
@@ -714,7 +1151,7 @@ describe("final confirmation", () => {
     harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
     const first = confirmPreparation(harness);
     await expect(confirmPreparation(harness)).rejects.toThrow(
-      "confirmation is already in progress",
+      "already awaiting the user's response",
     );
     expect(harness.ctx.ui.confirm).toHaveBeenCalledOnce();
     confirmation.resolve(false);
@@ -780,9 +1217,9 @@ describe("force path", () => {
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
   });
 
-  it("38. force remains usable while agent requests are forbidden", async () => {
+  it("38. force remains usable while agent requests are denied", async () => {
     const harness = createHarness();
-    await harness.command().handler("forbid", harness.ctx);
+    await harness.command().handler("deny", harness.ctx);
     await harness.command().handler("force", harness.ctx);
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
   });
@@ -819,30 +1256,147 @@ describe("force path", () => {
   });
 });
 
-describe("workflow and caching-sensitive state", () => {
-  it("41. consumed preparation remains active through summary validation", async () => {
+describe("abort command", () => {
+  it("reports idle abort as a normal Pi error notification", async () => {
     const harness = createHarness();
-    await beginPreparedSummary(harness);
-    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
-    await recordSummaryDecision(harness, "stop");
-    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
-    expect(harness.activeTools()).not.toContain(DECISION_TOOL_NAME);
+    const initialTools = harness.activeTools();
+
+    await harness.command().handler("abort", harness.ctx);
+
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "No supercompaction is active.",
+      "error",
+    );
+    expect(harness.activeTools()).toEqual(initialTools);
   });
 
-  it("42. consumed preparation is removed after successful compaction when forbidden", async () => {
+  it("supports abort from the command menu", async () => {
     const harness = createHarness();
+    harness.ctx.ui.select.mockResolvedValue(
+      "Abort active pre-native supercompaction",
+    );
+
+    await harness.command().handler("", harness.ctx);
+
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "No supercompaction is active.",
+      "error",
+    );
+  });
+
+  it("cancels active preparation and preserves permission and schemas", async () => {
+    const harness = createHarness({ idle: false });
+    const initialTools = harness.activeTools();
+    await harness.command().handler("allow", harness.ctx);
+    await beginPreparation(harness);
+
+    await harness.command().handler("abort", harness.ctx);
+
+    expect(harness.ctx.abort).toHaveBeenCalledOnce();
+    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+      "Supercompaction was aborted before native compaction began.",
+      "info",
+    );
+    expect(harness.activeTools()).toEqual(initialTools);
+    await confirmPreparation(harness);
+    expect(harness.ctx.ui.confirm).toHaveBeenCalledOnce();
+  });
+
+  it("cancels an open confirmation without starting summary", async () => {
+    const harness = createHarness();
+    await beginPreparation(harness);
+    const confirmation = deferred<boolean>();
+    harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
+    const pending = confirmPreparation(harness);
+
+    await harness.command().handler("abort", harness.ctx);
+    confirmation.resolve(true);
+
+    await expect(pending).resolves.toMatchObject({
+      details: { status: "aborted" },
+    });
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
+    expect(harness.ctx.compact).not.toHaveBeenCalled();
+  });
+
+  it("cancels queued and active canonical-summary work", async () => {
+    const queued = createHarness();
+    await queued.command().handler("force", queued.ctx);
+    const queuedMessage = queued.messages(SUMMARY_REQUEST_TYPE)[0];
+    await queued.command().handler("abort", queued.ctx);
+    queued.handlers.get("message_end")?.(
+      customMessage(queuedMessage),
+      queued.ctx,
+    );
+    queued.handlers.get("agent_settled")?.({}, queued.ctx);
+    expect(queued.ctx.abort).toHaveBeenCalledOnce();
+    expect(queued.ctx.compact).not.toHaveBeenCalled();
+
+    const active = createHarness();
+    await beginForceSummary(active);
+    await active.command().handler("abort", active.ctx);
+    await expect(executeDecision(active, "stop")).rejects.toThrow(
+      "No supercompact summary",
+    );
+    active.handlers.get("agent_settled")?.({}, active.ctx);
+    expect(active.ctx.abort).toHaveBeenCalledOnce();
+    expect(active.ctx.compact).not.toHaveBeenCalled();
+  });
+
+  it("cancels a recorded summary before native compaction starts", async () => {
+    const harness = createHarness();
+    await beginForceSummary(harness);
+    await recordSummaryDecision(harness, "stop");
+
+    await harness.command().handler("abort", harness.ctx);
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+
+    expect(harness.ctx.abort).toHaveBeenCalledOnce();
+    expect(harness.ctx.compact).not.toHaveBeenCalled();
+  });
+
+  it("delegates cancellation after native compaction starts to the host", async () => {
+    const harness = createHarness();
+    await beginForceSummary(harness);
+    await recordSummaryDecision(harness, "stop");
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+    expect(harness.ctx.compact).toHaveBeenCalledOnce();
+
+    await harness.command().handler("abort", harness.ctx);
+
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringMatching(/Press Escape.*native cancellation mechanism/),
+      "warning",
+    );
+    expect(harness.ctx.abort).not.toHaveBeenCalled();
+  });
+});
+
+describe("workflow and caching-sensitive state", () => {
+  it("41. both schemas stay active through summary validation", async () => {
+    const harness = createHarness();
+    const initialTools = harness.activeTools();
+    await beginPreparedSummary(harness);
+    await recordSummaryDecision(harness, "stop");
+    expect(harness.activeTools()).toEqual(initialTools);
+  });
+
+  it("42. successful compaction keeps the active tool vector stable", async () => {
+    const harness = createHarness();
+    const initialTools = harness.activeTools();
     await beginPreparedSummary(harness);
     await compactSuccessfully(harness);
-    expect(harness.activeTools()).toEqual(["read", "bash"]);
+    expect(harness.activeTools()).toEqual(initialTools);
   });
 
-  it("43. consumed preparation is removed after workflow failure when forbidden", async () => {
+  it("43. workflow failure keeps the active tool vector stable", async () => {
     const harness = createHarness();
+    const initialTools = harness.activeTools();
     await beginPreparedSummary(harness);
     await recordSummaryDecision(harness, "stop");
     harness.handlers.get("agent_settled")?.({}, harness.ctx);
     harness.ctx.compact.mock.calls[0][0].onError(new Error("provider failed"));
-    expect(harness.activeTools()).toEqual(["read", "bash"]);
+    expect(harness.activeTools()).toEqual(initialTools);
   });
 
   it("44. session allow remains active after workflow success and failure", async () => {
@@ -861,35 +1415,37 @@ describe("workflow and caching-sensitive state", () => {
     expect(failure.activeTools()).toContain(AGENT_TOOL_NAME);
   });
 
-  it("45. forbid during preparation removes access immediately", async () => {
+  it("45. deny during preparation revokes access without changing schemas", async () => {
     const harness = createHarness();
+    const initialTools = harness.activeTools();
     await beginPreparation(harness);
-    await harness.command().handler("forbid", harness.ctx);
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
-    await expect(confirmPreparation(harness)).rejects.toThrow("not authorized");
+    await harness.command().handler("deny", harness.ctx);
+    expect(harness.activeTools()).toEqual(initialTools);
+    await expect(confirmPreparation(harness)).rejects.toThrow(
+      "explicitly denied",
+    );
   });
 
-  it("46. forbid during active summary revokes future access without corruption", async () => {
+  it("46. deny during active summary revokes future access without corruption", async () => {
     const harness = createHarness();
+    const initialTools = harness.activeTools();
     await beginPreparedSummary(harness);
-    await harness.command().handler("forbid", harness.ctx);
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
-    expect(harness.activeTools()).toContain(DECISION_TOOL_NAME);
+    await harness.command().handler("deny", harness.ctx);
+    expect(harness.activeTools()).toEqual(initialTools);
     await recordSummaryDecision(harness, "stop");
     harness.handlers.get("agent_settled")?.({}, harness.ctx);
     expect(harness.ctx.compact).toHaveBeenCalledOnce();
   });
 
-  it("47. internal decision cleanup remains independent of public policy", async () => {
+  it("47. internal decision cleanup leaves both schemas active", async () => {
     const harness = createHarness();
+    const initialTools = harness.activeTools();
     await harness.command().handler("allow", harness.ctx);
     await confirmPreparation(harness);
     const summary = harness.messages(SUMMARY_REQUEST_TYPE)[0];
     harness.handlers.get("message_end")?.(customMessage(summary), harness.ctx);
-    expect(harness.activeTools()).toContain(DECISION_TOOL_NAME);
     await recordSummaryDecision(harness, "stop");
-    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
-    expect(harness.activeTools()).not.toContain(DECISION_TOOL_NAME);
+    expect(harness.activeTools()).toEqual(initialTools);
   });
 
   it("48. continuation, auto-compaction, retries, filtering, and failure cleanup regressions pass", async () => {
@@ -930,8 +1486,10 @@ describe("workflow and caching-sensitive state", () => {
     await recordSummaryDecision(failure, "stop");
     failure.handlers.get("agent_settled")?.({}, failure.ctx);
     failure.ctx.compact.mock.calls[0][0].onError(new Error("provider failed"));
-    expect(failure.activeTools()).toEqual(["read", "bash"]);
+    expect(failure.activeTools()).toContain(AGENT_TOOL_NAME);
+    expect(failure.activeTools()).toContain(DECISION_TOOL_NAME);
     expect(failure.ctx.ui.setWorkingMessage).toHaveBeenLastCalledWith();
+    expect(failure.pi.setActiveTools).not.toHaveBeenCalled();
   });
 });
 
@@ -969,10 +1527,11 @@ describe("preserved workflow regressions", () => {
     preparation.pi.sendMessage.mockImplementationOnce(() => {
       throw new Error("queue failed");
     });
+    const preparationTools = preparation.activeTools();
     await preparation.command().handler("run", preparation.ctx);
-    expect(preparation.activeTools()).toEqual(["read", "bash"]);
+    expect(preparation.activeTools()).toEqual(preparationTools);
     expect(preparation.ctx.ui.notify).toHaveBeenLastCalledWith(
-      "Supercompact preparation failed: queue failed",
+      "Supercompact preparation failed: queue failed. No automatic retry will occur.",
       "error",
     );
 
@@ -981,10 +1540,11 @@ describe("preserved workflow regressions", () => {
     summary.pi.sendMessage.mockImplementationOnce(() => {
       throw new Error("summary queue failed");
     });
+    const summaryTools = summary.activeTools();
     await expect(confirmPreparation(summary)).rejects.toThrow(
-      "summary queue failed",
+      "summary queue failed. No automatic retry will occur",
     );
-    expect(summary.activeTools()).toEqual(["read", "bash"]);
+    expect(summary.activeTools()).toEqual(summaryTools);
   });
 
   it("cleans up a synchronous native compaction failure", async () => {
@@ -994,22 +1554,72 @@ describe("preserved workflow regressions", () => {
     harness.ctx.compact.mockImplementationOnce(() => {
       throw new Error("compact threw");
     });
+    const initialTools = harness.activeTools();
     harness.handlers.get("agent_settled")?.({}, harness.ctx);
-    expect(harness.activeTools()).toEqual(["read", "bash"]);
+    expect(harness.activeTools()).toEqual(initialTools);
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
-      "Supercompact failed: compact threw",
+      "Supercompact failed: compact threw. No automatic retry will occur.",
       "error",
     );
   });
 
-  it("fails safely when the internal decision tool is unavailable", async () => {
-    const harness = createHarness({ allowDecisionTool: false });
-    await beginPreparation(harness);
-    await expect(confirmPreparation(harness)).rejects.toThrow(
-      "internal continuation-decision tool is unavailable",
+  it("fails before run or force when the internal decision tool is excluded", async () => {
+    const run = createHarness({ allowDecisionTool: false });
+    await run.command().handler("run", run.ctx);
+    expect(run.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(0);
+    expect(run.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("internal decision tool"),
+      "error",
     );
-    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
-    expect(harness.activeTools()).toEqual(["read", "bash"]);
+
+    const force = createHarness({ allowDecisionTool: false });
+    await force.command().handler("force", force.ctx);
+    expect(force.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
+    expect(force.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringMatching(/re-enable it or reload/i),
+      "error",
+    );
+  });
+
+  it("fails before run when the public tool is excluded", async () => {
+    const harness = createHarness({ allowAgentTool: false });
+    await harness.command().handler("run", harness.ctx);
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(0);
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("public request tool"),
+      "error",
+    );
+  });
+
+  it("reports host exclusion while all permission commands still update state", async () => {
+    const harness = createHarness({ allowAgentTool: false });
+    await harness.command().handler("allow", harness.ctx);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allowed",
+    );
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("Execution remains unavailable"),
+      "warning",
+    );
+    await harness.command().handler("allow-noconfirm", harness.ctx);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allowed without confirmation",
+    );
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("Execution remains unavailable"),
+      "warning",
+    );
+    await harness.command().handler("deny", harness.ctx);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      undefined,
+    );
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("Execution remains unavailable"),
+      "warning",
+    );
   });
 
   it("renders successful internal metadata without visible lines", async () => {
@@ -1021,7 +1631,7 @@ describe("preserved workflow regressions", () => {
       tool.renderResult({}, {}, {}, { isError: false }).render(80),
     ).toEqual([]);
     expect(tool.renderResult({}, {}, {}, { isError: true }).render(80)).toEqual(
-      ["Continuation metadata was invalid; asking the agent to correct it."],
+      ["Continuation metadata was invalid; correct it as instructed."],
     );
   });
 
@@ -1065,6 +1675,7 @@ describe("preserved workflow regressions", () => {
   it("bounds invalid metadata retries and stops before compaction", async () => {
     const harness = createHarness();
     await beginForceSummary(harness);
+    let boundedResult: any;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       harness.handlers.get("message_end")?.(
         assistantMessage(attempt === 1 ? "## State\nBounded." : "", [
@@ -1075,15 +1686,26 @@ describe("preserved workflow regressions", () => {
         ]),
         harness.ctx,
       );
-      harness.handlers.get("tool_result")?.(
+      boundedResult = harness.handlers.get("tool_result")?.(
         toolResultMessage(`invalid-${attempt}`, { isError: true }),
         harness.ctx,
       );
     }
+    expect(boundedResult).toMatchObject({
+      isError: true,
+      content: [
+        {
+          text: expect.stringContaining(
+            "workflow stopped without starting compaction",
+          ),
+        },
+      ],
+    });
     expect(harness.ctx.abort).toHaveBeenCalledOnce();
     harness.handlers.get("agent_settled")?.({}, harness.ctx);
     expect(harness.ctx.compact).not.toHaveBeenCalled();
-    expect(harness.activeTools()).toEqual(["read", "bash"]);
+    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
+    expect(harness.activeTools()).toContain(DECISION_TOOL_NAME);
   });
 
   it("blocks other tools and mixed decision batches during summary", async () => {
@@ -1115,6 +1737,9 @@ describe("preserved workflow regressions", () => {
       block: true,
       reason: expect.stringContaining("Tools other than"),
     });
+    await expect(executeDecision(harness, "continue")).rejects.toThrow(
+      "exactly once and do not call any other tool",
+    );
   });
 
   it("filters completed decision artifacts without unrelated messages", () => {
@@ -1136,20 +1761,25 @@ describe("preserved workflow regressions", () => {
     const result = await confirmPreparation(harness);
     expect(result.details.status).toBe("canceled");
     expect(result.content[0].text).toContain("Do not retry automatically");
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
   });
 
-  it("forbid revokes authorization while confirmation is open", async () => {
+  it("deny revokes authorization while confirmation is open", async () => {
     const harness = createHarness();
+    const initialTools = harness.activeTools();
     await beginPreparation(harness);
     const confirmation = deferred<boolean>();
     harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
     const pending = confirmPreparation(harness);
-    await harness.command().handler("forbid", harness.ctx);
+    await harness.command().handler("deny", harness.ctx);
     confirmation.resolve(true);
-    expect((await pending).details.status).toBe("revoked");
+    const result = await pending;
+    expect(result.details.status).toBe("revoked");
+    expect(result.content[0].text).toContain(
+      "wait for the user to reauthorize",
+    );
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
-    expect(harness.activeTools()).not.toContain(AGENT_TOOL_NAME);
+    expect(harness.activeTools()).toEqual(initialTools);
   });
 
   it("rejects an empty exact next action", async () => {
@@ -1157,9 +1787,54 @@ describe("preserved workflow regressions", () => {
     await beginPreparation(harness);
     await expect(
       confirmPreparation(harness, { nextAction: "   " }),
-    ).rejects.toThrow("nextAction must not be empty");
+    ).rejects.toThrow("Supply one concrete next action");
     expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
   });
+});
+
+describe("durable continuation outcome", () => {
+  it.each([
+    [
+      "continue",
+      "Super-summary prepared. After compaction, the agent will continue working.",
+    ],
+    [
+      "stop",
+      "Super-summary prepared. After compaction, the agent will wait for further instructions before proceeding.",
+    ],
+  ] as const)(
+    "persists and renders the %s outcome without adding model context",
+    async (continuation, expectedMessage) => {
+      const harness = createHarness();
+      await beginForceSummary(harness);
+      await recordSummaryDecision(harness, continuation);
+
+      expect(harness.pi.registerEntryRenderer).toHaveBeenCalledOnce();
+      expect(harness.pi.registerEntryRenderer).toHaveBeenCalledWith(
+        CONTINUATION_OUTCOME_ENTRY_TYPE,
+        expect.any(Function),
+      );
+      expect(harness.pi.appendEntry).toHaveBeenCalledOnce();
+      expect(harness.pi.appendEntry).toHaveBeenCalledWith(
+        CONTINUATION_OUTCOME_ENTRY_TYPE,
+        { continuation, message: expectedMessage },
+      );
+      expect(
+        harness
+          .entryRenderer()(
+            { data: { continuation, message: expectedMessage } },
+            {},
+            {},
+          )
+          .render(80),
+      ).toEqual([expectedMessage]);
+      expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+        expectedMessage,
+        "info",
+      );
+      expect(harness.messages(CONTINUATION_OUTCOME_ENTRY_TYPE)).toHaveLength(0);
+    },
+  );
 });
 
 describe("summary helper contracts", () => {
@@ -1188,5 +1863,160 @@ describe("summary helper contracts", () => {
     expect(restored).toContain("User-confirmed expectation: continue");
     expect(restored).toContain("Validated continuation: stop");
     expect(restored).toContain("conservatively downgraded to stop");
+  });
+
+  it("normalizes confirmation previews and truncates only after ten words", () => {
+    expect(
+      previewConfirmationValue(
+        "  one\ttwo three\nfour five six seven eight nine ten  ",
+      ),
+    ).toBe("one two three four five six seven eight nine ten");
+    expect(
+      previewConfirmationValue(
+        "one two three four five six seven eight nine ten eleven",
+      ),
+    ).toBe("one two three four five six seven eight nine ten…");
+    expect(
+      buildConfirmationText({
+        expectedContinuation: "continue",
+        nextAction: "Wait for the user.",
+      }).split("\n\n"),
+    ).toEqual([
+      "Post-compaction behavior: continue authorized work",
+      "Next action: Wait for the user.",
+      "Confirming will begin the canonical super-summary and native compaction immediately.",
+    ]);
+  });
+
+  it("restores every full preparation value after truncated previews", async () => {
+    const runExtraContext =
+      "one two three four five six seven eight nine ten eleven twelve";
+    const nextAction =
+      "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    const agentExtraContext =
+      "red orange yellow green blue indigo violet black white gray silver gold";
+    const harness = createHarness();
+    await beginPreparedSummary(harness, {
+      runContext: runExtraContext,
+      params: { nextAction, extraContext: agentExtraContext },
+    });
+    await recordSummaryDecision(harness, "continue");
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+    harness.ctx.compact.mock.calls[0][0].onComplete({});
+
+    const restoredMessage = harness.messages(CONTEXT_MESSAGE_TYPE)[0];
+    expect(restoredMessage.details.preparation).toEqual({
+      expectedContinuation: "continue",
+      nextAction,
+      runExtraContext,
+      agentExtraContext,
+    });
+    expect(restoredMessage.content).toContain(nextAction);
+    expect(restoredMessage.content).toContain(runExtraContext);
+    expect(restoredMessage.content).toContain(agentExtraContext);
+  });
+
+  it("keeps permanent prompts and tool descriptions evergreen", () => {
+    const harness = createHarness();
+    const preparation = buildPreparationPrompt("context");
+    const summary = buildSummaryPrompt("context");
+    const continuation = buildContinuationMessage({
+      action: "continue",
+      summary: "## Next action\nContinue authorized work.",
+    });
+    const descriptions = harness
+      .registeredTools()
+      .map((tool) => tool.description)
+      .join("\n");
+    const permanentText = [
+      preparation,
+      summary,
+      continuation,
+      descriptions,
+    ].join("\n");
+
+    expect(permanentText).not.toMatch(
+      /n-skill|private workflow|personal workflow/i,
+    );
+    expect(permanentText).not.toMatch(/migration|formerly|superseded/i);
+    expect(preparation).not.toContain("actual scoped repository state");
+    expect(preparation).not.toContain("observe repository commit rules");
+    expect(preparation).toContain("Refresh relevant context");
+    expect(preparation).toContain("Correct scoped staleness");
+    expect(preparation).toContain("already authorized");
+    expect(preparation).toContain("blockers");
+    expect(preparation).toContain("Verify or persist");
+    expect(preparation).toContain("one exact immediate next action");
+    expect(summary).toContain("Relevant resources by work horizon");
+    expect(summary).toContain("include exact file paths when files materially");
+    expect(descriptions).toContain("availability does not imply authorization");
+    expect(descriptions).toContain(
+      "Availability alone is never an instruction",
+    );
+  });
+});
+
+describe("stable-schema runtime gates", () => {
+  it("registers each tool once and never changes active tools", async () => {
+    const harness = createHarness();
+    const initialTools = harness.activeTools();
+    expect(harness.pi.registerTool).toHaveBeenCalledTimes(2);
+    expect(harness.registeredTools().map((tool) => tool.name)).toEqual([
+      DECISION_TOOL_NAME,
+      AGENT_TOOL_NAME,
+    ]);
+
+    await beginPreparation(harness);
+    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("allow", harness.ctx);
+    harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
+    harness.handlers.get("session_shutdown")?.({}, harness.ctx);
+
+    expect(harness.activeTools()).toEqual(initialTools);
+    expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
+  });
+
+  it("rejects internal calls with phase-specific guidance", async () => {
+    const absent = createHarness();
+    await expect(executeDecision(absent, "stop")).rejects.toThrow(
+      "hidden canonical-summary prompt",
+    );
+
+    const queued = createHarness();
+    await queued.command().handler("force", queued.ctx);
+    await expect(executeDecision(queued, "stop")).rejects.toThrow(
+      "canonical-summary phase has not begun",
+    );
+
+    const missingSummary = createHarness();
+    await beginForceSummary(missingSummary);
+    missingSummary.handlers.get("message_end")?.(
+      assistantMessage("", [{ id: "decision-empty" }]),
+      missingSummary.ctx,
+    );
+    await expect(
+      executeDecision(missingSummary, "stop", "decision-empty"),
+    ).rejects.toThrow("non-empty Markdown handoff");
+
+    const advanced = createHarness();
+    await beginForceSummary(advanced);
+    await recordSummaryDecision(advanced, "stop");
+    await expect(
+      executeDecision(advanced, "stop", "decision-2"),
+    ).rejects.toThrow("workflow has advanced");
+  });
+
+  it("rechecks internal-tool availability after confirmation opens", async () => {
+    const harness = createHarness();
+    await beginPreparation(harness);
+    const confirmation = deferred<boolean>();
+    harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
+    const pending = confirmPreparation(harness);
+    harness.excludeTool(DECISION_TOOL_NAME);
+    confirmation.resolve(true);
+
+    await expect(pending).rejects.toThrow("internal decision tool");
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
+    expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
   });
 });
