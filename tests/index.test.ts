@@ -19,6 +19,7 @@ const PREPARATION_REQUEST_TYPE = "pi-supercompact:preparation-request";
 const SUMMARY_REQUEST_TYPE = "pi-supercompact:summary-request";
 const CONTEXT_MESSAGE_TYPE = "pi-supercompact:context";
 const CONTINUATION_OUTCOME_ENTRY_TYPE = "pi-supercompact:continuation-outcome";
+const SESSION_PERMISSION_ENTRY_TYPE = "pi-supercompact:session-permission";
 const DECISION_TOOL_NAME = "record_supercompact_decision";
 const AGENT_TOOL_NAME = "supercompact";
 const PROJECT_CWD = "/workspace/test-project";
@@ -56,8 +57,12 @@ function createHarness(options: HarnessOptions = {}) {
   let command: any;
   let entryRenderer: any;
   const tools = new Map<string, any>();
+  const sessionEntries: any[] = [];
   let activeTools = ["read", "bash"];
   const sendMessage = vi.fn();
+  const appendEntry = vi.fn((customType: string, data: unknown) => {
+    sessionEntries.push({ type: "custom", customType, data });
+  });
 
   const pi = {
     on: vi.fn((event: string, handler: Handler) =>
@@ -80,7 +85,7 @@ function createHarness(options: HarnessOptions = {}) {
     registerEntryRenderer: vi.fn((_customType: string, renderer: any) => {
       entryRenderer = renderer;
     }),
-    appendEntry: vi.fn(),
+    appendEntry,
     getActiveTools: vi.fn(() => [...activeTools]),
     setActiveTools: vi.fn((toolNames: string[]) => {
       activeTools = toolNames.filter(
@@ -101,6 +106,10 @@ function createHarness(options: HarnessOptions = {}) {
     hasUI: options.hasUI ?? true,
     isProjectTrusted: vi.fn(() => options.projectTrusted ?? true),
     isIdle: vi.fn(() => options.idle ?? true),
+    sessionManager: {
+      getBranch: vi.fn(() => [...sessionEntries]),
+      getEntries: vi.fn(() => [...sessionEntries]),
+    },
     ui: {
       notify: vi.fn(),
       select: vi.fn(),
@@ -559,7 +568,7 @@ describe("configuration and live-session permission", () => {
     );
   });
 
-  it("16. session initialization discards overrides and reapplies config", async () => {
+  it("16. non-reload session initialization discards overrides and reapplies config", async () => {
     const harness = createHarness({
       globalConfig: '{"agentRequestsAllowed":true}',
     });
@@ -567,7 +576,7 @@ describe("configuration and live-session permission", () => {
     await expect(confirmPreparation(harness)).rejects.toThrow(
       "explicitly denied",
     );
-    harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
+    harness.handlers.get("session_start")?.({ reason: "resume" }, harness.ctx);
     await expect(confirmPreparation(harness)).resolves.toMatchObject({
       details: { status: "queued" },
     });
@@ -718,12 +727,12 @@ describe("configuration and live-session permission", () => {
     }
   });
 
-  it("restores configured no-confirm after session overrides", async () => {
+  it("restores configured no-confirm after session overrides on a non-reload initialization", async () => {
     const harness = createHarness({
       globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
     });
     await harness.command().handler("allow", harness.ctx);
-    harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
+    harness.handlers.get("session_start")?.({ reason: "resume" }, harness.ctx);
     const result = await confirmPreparation(harness);
     expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
     expect(result.details.authorization).toBe("configured-no-confirm");
@@ -875,27 +884,47 @@ describe("session-only no-confirm permission", () => {
     );
   });
 
-  it("discards session mode without surfacing configured permission on lifecycle initialization", async () => {
-    const harness = createHarness({
-      globalConfig: '{"agentRequestsAllowed":true,"unrecognized":true}',
+  it("restores each explicit session mode and its status after reload", async () => {
+    const noConfirm = createHarness({
+      globalConfig: '{"agentRequestsAllowed":false}',
     });
-    await harness.command().handler("allow-noconfirm", harness.ctx);
-    harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
-
-    await confirmPreparation(harness);
-
-    expect(harness.ctx.ui.confirm).toHaveBeenCalledOnce();
-    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+    await noConfirm.command().handler("allow-noconfirm", noConfirm.ctx);
+    expect(noConfirm.pi.appendEntry).toHaveBeenCalledWith(
+      SESSION_PERMISSION_ENTRY_TYPE,
+      { permission: "allowed-noconfirm" },
+    );
+    noConfirm.handlers.get("session_start")?.(
+      { reason: "reload" },
+      noConfirm.ctx,
+    );
+    await confirmPreparation(noConfirm);
+    expect(noConfirm.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(noConfirm.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      undefined,
+      "supercompact: allow-noconfirm 🗜️ ",
     );
 
-    const shutdown = createHarness({
-      globalConfig: '{"agentRequestsAllowed":true}',
+    const allowed = createHarness({
+      globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
     });
-    await shutdown.command().handler("allow-noconfirm", shutdown.ctx);
-    shutdown.handlers.get("session_shutdown")?.({}, shutdown.ctx);
-    expect(shutdown.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+    await allowed.command().handler("allow", allowed.ctx);
+    allowed.handlers.get("session_start")?.({ reason: "reload" }, allowed.ctx);
+    await confirmPreparation(allowed);
+    expect(allowed.ctx.ui.confirm).toHaveBeenCalledOnce();
+    expect(allowed.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allow 🗜️ ",
+    );
+
+    const denied = createHarness({
+      globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
+    });
+    await denied.command().handler("deny", denied.ctx);
+    denied.handlers.get("session_start")?.({ reason: "reload" }, denied.ctx);
+    await expect(confirmPreparation(denied)).rejects.toThrow(
+      "explicitly denied",
+    );
+    expect(denied.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
       undefined,
     );

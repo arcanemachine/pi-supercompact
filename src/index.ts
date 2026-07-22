@@ -13,6 +13,7 @@ const PREPARATION_REQUEST_TYPE = "pi-supercompact:preparation-request";
 const SUMMARY_REQUEST_TYPE = "pi-supercompact:summary-request";
 const CONTEXT_MESSAGE_TYPE = "pi-supercompact:context";
 const CONTINUATION_OUTCOME_ENTRY_TYPE = "pi-supercompact:continuation-outcome";
+const SESSION_PERMISSION_ENTRY_TYPE = "pi-supercompact:session-permission";
 const DECISION_TOOL_NAME = "record_supercompact_decision";
 const AGENT_TOOL_NAME = "supercompact";
 const CONFIG_FILE_NAME = "pi-supercompact.json";
@@ -51,6 +52,11 @@ type RequestPhase =
 type AgentPermission = "allowed" | "allowed-noconfirm" | "denied";
 type ConfiguredPermission = AgentPermission;
 type SessionPermissionOverride = AgentPermission;
+
+interface SessionPermissionEntryData {
+  permission: SessionPermissionOverride;
+}
+
 type NoConfirmAuthorization = NonNullable<
   ConfirmedPreparationContext["authorization"]
 >;
@@ -595,6 +601,37 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
               ? "supercompact: allow 🗜️ "
               : undefined;
     ctx.ui.setStatus(STATUS_KEY, status);
+  };
+
+  const persistSessionPermissionOverride = (): void => {
+    if (!sessionPermissionOverride) return;
+    pi.appendEntry<SessionPermissionEntryData>(SESSION_PERMISSION_ENTRY_TYPE, {
+      permission: sessionPermissionOverride,
+    });
+  };
+
+  const restoreSessionPermissionOverride = (
+    ctx: ExtensionContext,
+  ): SessionPermissionOverride | undefined => {
+    const branch = ctx.sessionManager.getBranch();
+    for (let index = branch.length - 1; index >= 0; index -= 1) {
+      const entry = branch[index];
+      if (
+        entry?.type !== "custom" ||
+        entry.customType !== SESSION_PERMISSION_ENTRY_TYPE
+      ) {
+        continue;
+      }
+
+      if (!isRecord(entry.data)) return "denied";
+      const permission = entry.data.permission;
+      return permission === "allowed" ||
+        permission === "allowed-noconfirm" ||
+        permission === "denied"
+        ? permission
+        : "denied";
+    }
+    return undefined;
   };
 
   const unavailableTools = (toolNames: string[]): string[] => {
@@ -1203,7 +1240,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", (event, ctx) => {
     const canceledPreparation = Boolean(
       (preparationGrant && !preparationGrant.consumed) || confirmationId,
     );
@@ -1215,7 +1252,10 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     confirmationAbortController = undefined;
     confirmationRevoked = false;
     abortedConfirmationIds.clear();
-    sessionPermissionOverride = undefined;
+    sessionPermissionOverride =
+      event.reason === "reload"
+        ? restoreSessionPermissionOverride(ctx)
+        : undefined;
     applyConfiguredPolicy(ctx);
     updateStatus(ctx);
     if (canceledPreparation) {
@@ -1649,6 +1689,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   const allowAgentRequests = (ctx: ExtensionContext): void => {
     const alreadyAllowed = sessionPermissionOverride === "allowed";
     sessionPermissionOverride = "allowed";
+    if (!alreadyAllowed) persistSessionPermissionOverride();
     updateStatus(ctx);
     notifyPermission(
       ctx,
@@ -1663,6 +1704,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   ): void => {
     const alreadyAllowed = sessionPermissionOverride === "allowed-noconfirm";
     sessionPermissionOverride = "allowed-noconfirm";
+    if (!alreadyAllowed) persistSessionPermissionOverride();
     updateStatus(ctx);
     notifyPermission(
       ctx,
@@ -1673,11 +1715,11 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   };
 
   const denyAgentRequests = (ctx: ExtensionContext): void => {
+    const permissionWasDenied = sessionPermissionOverride === "denied";
     const wasAlreadyDenied =
-      sessionPermissionOverride === "denied" &&
-      !preparationGrant &&
-      !confirmationId;
+      permissionWasDenied && !preparationGrant && !confirmationId;
     sessionPermissionOverride = "denied";
+    if (!permissionWasDenied) persistSessionPermissionOverride();
 
     const canceledConfirmation = cancelPendingConfirmation();
     const canceledPreparation = Boolean(

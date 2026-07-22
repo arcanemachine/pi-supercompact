@@ -88,7 +88,7 @@ Pi does not expose native compaction cancellation to extensions. Once native com
 - `/supercompact allow-noconfirm` permits agent requests without the final confirmation dialog for the current live extension session.
 - `/supercompact deny` revokes either mode and cancels an unused preparation or open confirmation.
 
-These commands update in-memory permission only and never write configuration. Starting, reloading, resuming, or forking a session discards the override and reapplies configured denied, confirmation-required, or no-confirm permission.
+These commands update session-local permission and never write configuration. A context-excluded custom session entry restores the override and its status across `/reload`; it does not enter model context. Starting a new process, creating or resuming a session, or forking discards the override and reapplies configured denied, confirmation-required, or no-confirm permission.
 
 Confirmation-required permission lets an agent request supercompaction but still requires final TUI or RPC confirmation. No-confirm permission is stronger authorization: an agent request may queue the canonical summary and native compaction without another approval prompt. It skips only the dialog; preparation expectations, exact-next-action validation, concurrency and host-tool checks, summary validation, continuation constraints, bounded retries, compaction, filtering, restoration, and cleanup remain enforced.
 
@@ -134,7 +134,7 @@ The extension registers these tools once when it loads and keeps their schemas a
 
 Tool visibility does not grant authority. The public tool checks effective session permission or an unused `run` grant, workflow and confirmation state, internal-tool availability, exact-next-action validity, UI capability when the active mode requires it, and authorization again at the last applicable boundary. The internal tool accepts a call only during the canonical-summary phase with a valid non-empty handoff, exactly one decision call, no other tool calls, and all confirmed stop constraints intact.
 
-The extension never changes Pi's active tool selection to enforce permission. If the user or host excludes a required extension tool, the extension respects that choice. `run` and `force` fail before creating workflow state when required tools are unavailable, and explain that the tool must be re-enabled or the extension reloaded with its tools available. `allow`, `allow-noconfirm`, and `deny` still update in-memory permission while reporting that execution remains unavailable. `abort` never changes the active tool selection.
+The extension never changes Pi's active tool selection to enforce permission. If the user or host excludes a required extension tool, the extension respects that choice. `run` and `force` fail before creating workflow state when required tools are unavailable, and explain that the tool must be re-enabled or the extension reloaded with its tools available. `allow`, `allow-noconfirm`, and `deny` still update session-local permission while reporting that execution remains unavailable. `abort` never changes the active tool selection.
 
 ## How it works
 
@@ -212,7 +212,7 @@ Completed or canceled preparation-control messages, stale summary requests, dupl
 - TUI and RPC modes support the final confirmation dialog.
 - `force` works in print and JSON modes because it is explicit authorization.
 - `run` stops before preparation when its effective confirmation mode requires UI; configured or live-session no-confirm mode works headlessly.
-- `allow`, `allow-noconfirm`, and `deny` update in-memory permission headlessly.
+- `allow`, `allow-noconfirm`, and `deny` update session-local permission headlessly.
 - Confirmation-required agent execution fails closed without confirmation UI; no-confirm execution works headlessly while retaining every non-dialog guard.
 - The bare menu requires TUI or RPC mode.
 
