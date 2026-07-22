@@ -987,7 +987,7 @@ describe("preparation", () => {
     expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: preparing",
+      "supercompact: preparing 🗜️ ",
     );
   });
 
@@ -1209,6 +1209,10 @@ describe("final confirmation", () => {
     const confirmation = deferred<boolean>();
     harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
     const first = confirmPreparation(harness);
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: awaiting confirmation 🗜️ ",
+    );
     await expect(confirmPreparation(harness)).rejects.toThrow(
       "already awaiting the user's response",
     );

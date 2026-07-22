@@ -592,9 +592,9 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     if (!ctx.hasUI) return;
     const status =
       confirmationId && !confirmationRevoked
-        ? "supercompact: awaiting confirmation"
+        ? "supercompact: awaiting confirmation 🗜️ "
         : preparationGrant && !preparationGrant.consumed
-          ? "supercompact: preparing"
+          ? "supercompact: preparing 🗜️ "
           : sessionPermissionOverride === "allowed-noconfirm"
             ? "supercompact: allow-noconfirm 🗜️ "
             : sessionPermissionOverride === "allowed"
