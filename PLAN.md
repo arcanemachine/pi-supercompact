@@ -210,6 +210,34 @@ This removes extension-caused mid-session schema invalidation. It does not guara
 
 The README must state this distinction and must not promise that every provider request will hit cache.
 
+## Evergreen prompt content
+
+Treat every permanent tool description, hidden preparation prompt, canonical-summary prompt, continuation message, error, and notification as standalone product language.
+
+Requirements:
+
+1. Do not name or reference external skills, dispatchers, private conventions, authors, organizations, or a particular user's workflow.
+2. Do not require knowledge of how the prompt was designed. State the required behavior directly and self-containedly.
+3. Use generic role terms such as “user” and “agent” only when the distinction is operationally necessary; do not embed personal preferences or project-specific narrative.
+4. Describe current behavior, not migrations, former names, superseded commands, or how the implementation arrived at its current design.
+5. Keep instructions applicable across coding, documentation, research, planning, and mixed sessions. Repository, file, validation, and commit checks must be conditional rather than assumed.
+6. Preserve focused refresh-and-close behavior without branded terminology:
+   - re-read relevant durable sources instead of trusting memory;
+   - compare them with actual current state;
+   - correct scoped staleness;
+   - finish only authorized work that needs no new input;
+   - surface blockers and questions;
+   - verify or persist work when applicable;
+   - establish an exact continuation or stopping point.
+7. Replace the preparation headings `Freshen the active context` and `Wrap the active boundary` with neutral, descriptive headings such as `Refresh relevant context` and `Close the active boundary`.
+8. Avoid assuming that every session has a Git repository, files to edit, tests to run, or commits to make. Use “when applicable” language and honor whatever scoped project or session rules exist.
+9. Keep extra context subordinate to established authorization and constraints without referring to any private workflow.
+10. Keep the canonical handoff concise and evergreen. Generalize file-only guidance into relevant resources by work horizon while still preserving exact file paths when files materially affect continuation.
+
+Generic references to the current user, explicit user authorization, and user confirmation are valid because they define the security boundary. They must remain role-based and universal.
+
+Add focused prompt-contract tests that reject skill names, private-workflow references, migration language, and unconditional repository assumptions while asserting the required refresh, closure, authorization, blocker, verification, and exact-next-action concepts.
+
 ## Implementation outline
 
 ### `src/index.ts`
@@ -223,7 +251,9 @@ The README must state this distinction and must not promise that every provider 
 7. Replace schema reconciliation call sites with status-only updates and state cleanup.
 8. Add state-specific public authorization, busy, confirmation, headless, revocation, and failure messages.
 9. Add state-specific internal decision-tool phase messages.
-10. Preserve preparation, final confirmation, summary generation, continuation constraints, filtering, retry bounds, compaction, and restoration behavior.
+10. Rewrite permanent prompt and tool text according to the evergreen prompt-content requirements.
+11. Generalize canonical handoff resource guidance without losing exact actionable references.
+12. Preserve preparation, final confirmation, summary generation, continuation constraints, filtering, retry bounds, compaction, and restoration behavior.
 
 ### `tests/index.test.ts`
 
@@ -250,7 +280,9 @@ Add or revise tests for:
 17. `/run` fails before creating a grant when the public or internal tool is excluded by host selection.
 18. `/force` fails before summary when the internal tool is excluded.
 19. `/allow` and `/forbid` report permission plus host-level unavailability when the public tool is excluded.
-20. Existing preparation, confirmation, continuation, filtering, auto-compaction, bounded retry, synchronous failure, and restoration tests continue to pass.
+20. Preparation and summary prompts contain no skill names, private-workflow references, personal names, migration language, or unconditional repository assumptions.
+21. Prompt tests preserve focused context refresh, scoped staleness correction, authorized completion, blockers, conditional verification/persistence, continuation choice, and exact-next-action guidance.
+22. Existing preparation, confirmation, continuation, filtering, auto-compaction, bounded retry, synchronous failure, and restoration tests continue to pass.
 
 ### `README.md`
 
@@ -262,9 +294,10 @@ Update:
 - user and agent messages for forbidden/headless/busy states;
 - stable public and internal schemas;
 - cache expectations and remaining provider-dependent miss causes;
-- host-level explicit tool exclusion behavior.
+- host-level explicit tool exclusion behavior;
+- self-contained, universal refresh-and-close behavior without references to external skills or private workflows.
 
-Remove statements that the public tool is inactive by default, that `/run` or `/allow` exposes it, that forbid removes it, or that the internal decision tool is only active during summary.
+Final documentation must describe only the resulting product behavior. It must not retain superseded terminology, migration narration, or references to the design process.
 
 ### `CHANGELOG.md`
 
@@ -326,10 +359,11 @@ Delete this plan only after all of the following are true:
 4. State-specific agent guidance is implemented and tested.
 5. Configuration uses `agentRequestsAllowed`; missing, unrecognized, and invalid permission fails closed.
 6. Preparation, confirmation, continuation, filtering, retry, cleanup, and compaction regressions pass.
-7. README and changelog describe the final behavior without stale dynamic-schema claims.
-8. Package and workspace validation pass.
-9. Live Pi verification passes, including stable active tools and an accepted compaction workflow.
-10. A final review finds no unresolved item, unsupported assumption, or unrelated modification.
+7. Every permanent prompt and tool description is self-contained, evergreen, broadly applicable, and free of skill or private-workflow references.
+8. README and changelog describe only the final behavior without stale dynamic-schema or migration language.
+9. Package and workspace validation pass.
+10. Live Pi verification passes, including stable active tools and an accepted compaction workflow.
+11. A final review finds no unresolved item, unsupported assumption, or unrelated modification.
 
 Then delete `PLAN.md`, commit the child package with a Conventional Commit, and commit only the updated `packages/pi-supercompact` pointer in the superproject. Do not push or publish.
 
