@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add `/supercompact allow-noconfirm-once` as a non-persistent overlay for one successfully queued agent request, with automatic restoration, redundant-permission warnings, lifecycle and superseding-command cancellation, headless support, and unchanged workflow guards.
 - Keep canonical-summary requests active across failed, aborted, truncated, unusable, or metadata-invalid assistant turns so normal retries and resends can complete the existing workflow.
 - Distinguish the transient summary spinner as `Summarizing…` from the one-time creation notification.
 

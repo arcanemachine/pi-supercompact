@@ -333,6 +333,15 @@ async function compactSuccessfully(
   harness.ctx.compact.mock.calls.at(-1)?.[0].onComplete({});
 }
 
+async function finishQueuedSupercompact(
+  harness: ReturnType<typeof createHarness>,
+) {
+  const summary = harness.messages(SUMMARY_REQUEST_TYPE).at(-1);
+  if (!summary) throw new Error("summary request not sent");
+  harness.handlers.get("message_end")?.(customMessage(summary), harness.ctx);
+  await compactSuccessfully(harness);
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -360,6 +369,7 @@ describe("commands and menu", () => {
       "Force supercompaction now",
       "Allow agent requests with confirmation for this session",
       "Allow agent requests without confirmation for this session",
+      "Allow the next agent request without confirmation",
       "Deny agent supercompaction requests for this session",
       "Abort active pre-native supercompaction",
       "Cancel",
@@ -379,6 +389,23 @@ describe("commands and menu", () => {
       "supercompact: allow-noconfirm 🗜️ ",
     );
     await confirmPreparation(harness);
+    expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
+  });
+
+  it("selecting one-shot no-confirm in the menu arms one request", async () => {
+    const harness = createHarness();
+    harness.ctx.ui.select.mockResolvedValue(
+      "Allow the next agent request without confirmation",
+    );
+
+    await harness.command().handler("", harness.ctx);
+
+    expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allow-noconfirm-once 🗜️ ",
+    );
+    const result = await confirmPreparation(harness);
+    expect(result.details.authorization).toBe("one-shot-no-confirm");
     expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
   });
 
@@ -430,12 +457,18 @@ describe("commands and menu", () => {
   it("6. completion exposes every supported positional command", () => {
     const harness = createHarness();
     expect(harness.command().getArgumentCompletions("")).toEqual(
-      ["run", "force", "allow", "allow-noconfirm", "deny", "abort"].map(
-        (value) => ({
-          value,
-          label: value,
-        }),
-      ),
+      [
+        "run",
+        "force",
+        "allow",
+        "allow-noconfirm",
+        "allow-noconfirm-once",
+        "deny",
+        "abort",
+      ].map((value) => ({
+        value,
+        label: value,
+      })),
     );
   });
 
@@ -446,6 +479,7 @@ describe("commands and menu", () => {
       "disable",
       "allow extra",
       "allow-noconfirm extra",
+      "allow-noconfirm-once extra",
       "deny extra",
       "abort extra",
       "legacy bare context",
@@ -454,7 +488,7 @@ describe("commands and menu", () => {
     }
     expect(harness.pi.sendMessage).not.toHaveBeenCalled();
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
-      "Usage: /supercompact [run [extra context] | force [extra context] | allow | allow-noconfirm | deny | abort]",
+      "Usage: /supercompact [run [extra context] | force [extra context] | allow | allow-noconfirm | allow-noconfirm-once | deny | abort]",
       "error",
     );
   });
@@ -480,7 +514,7 @@ describe("configuration and live-session permission", () => {
       AGENT_TOOL_NAME,
     ]);
     await expect(confirmPreparation(harness)).rejects.toThrow(
-      /\/supercompact run for a prepared one-off request.*\/supercompact allow.*\/supercompact allow-noconfirm/,
+      /\/supercompact (run|allow|allow-noconfirm|allow-noconfirm-once)/,
     );
   });
 
@@ -968,6 +1002,265 @@ describe("session-only no-confirm permission", () => {
     );
     harness.handlers.get("session_shutdown")?.({}, harness.ctx);
 
+    expect(harness.activeTools()).toEqual(initialTools);
+    expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
+  });
+});
+
+describe("one-shot no-confirm permission", () => {
+  it("overlays denial or confirmation permission once, then restores it", async () => {
+    const configuredDenied = createHarness();
+    await configuredDenied
+      .command()
+      .handler("allow-noconfirm-once", configuredDenied.ctx);
+    const configuredDeniedResult = await confirmPreparation(configuredDenied);
+    expect(configuredDeniedResult.details.authorization).toBe(
+      "one-shot-no-confirm",
+    );
+    expect(configuredDenied.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(configuredDenied.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      undefined,
+    );
+    await finishQueuedSupercompact(configuredDenied);
+    await expect(confirmPreparation(configuredDenied)).rejects.toThrow(
+      "not authorized",
+    );
+
+    const configuredConfirm = createHarness({
+      globalConfig: '{"agentRequestsAllowed":true}',
+    });
+    await configuredConfirm
+      .command()
+      .handler("allow-noconfirm-once", configuredConfirm.ctx);
+    await confirmPreparation(configuredConfirm);
+    await finishQueuedSupercompact(configuredConfirm);
+    await confirmPreparation(configuredConfirm);
+    expect(configuredConfirm.ctx.ui.confirm).toHaveBeenCalledOnce();
+
+    const explicitlyDenied = createHarness();
+    await explicitlyDenied.command().handler("deny", explicitlyDenied.ctx);
+    await explicitlyDenied
+      .command()
+      .handler("allow-noconfirm-once", explicitlyDenied.ctx);
+    await confirmPreparation(explicitlyDenied);
+    await finishQueuedSupercompact(explicitlyDenied);
+    await expect(confirmPreparation(explicitlyDenied)).rejects.toThrow(
+      "explicitly denied",
+    );
+
+    const explicitlyAllowed = createHarness();
+    await explicitlyAllowed.command().handler("allow", explicitlyAllowed.ctx);
+    await explicitlyAllowed
+      .command()
+      .handler("allow-noconfirm-once", explicitlyAllowed.ctx);
+    await confirmPreparation(explicitlyAllowed);
+    expect(explicitlyAllowed.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allow 🗜️ ",
+    );
+    await finishQueuedSupercompact(explicitlyAllowed);
+    await confirmPreparation(explicitlyAllowed);
+    expect(explicitlyAllowed.ctx.ui.confirm).toHaveBeenCalledOnce();
+  });
+
+  it("warns and does not arm when effective permission already skips confirmation", async () => {
+    const configured = createHarness({
+      globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
+    });
+    await configured.command().handler("allow-noconfirm-once", configured.ctx);
+    expect(configured.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("already allowed without confirmation"),
+      "warning",
+    );
+    expect(configured.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      undefined,
+    );
+    await expect(confirmPreparation(configured)).resolves.toMatchObject({
+      details: { authorization: "configured-no-confirm" },
+    });
+
+    const liveSession = createHarness();
+    await liveSession.command().handler("allow-noconfirm", liveSession.ctx);
+    await liveSession
+      .command()
+      .handler("allow-noconfirm-once", liveSession.ctx);
+    expect(liveSession.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("already allowed without confirmation"),
+      "warning",
+    );
+    expect(liveSession.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allow-noconfirm 🗜️ ",
+    );
+    await expect(confirmPreparation(liveSession)).resolves.toMatchObject({
+      details: { authorization: "session-no-confirm" },
+    });
+
+    const overriddenConfig = createHarness({
+      globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
+    });
+    await overriddenConfig.command().handler("deny", overriddenConfig.ctx);
+    await overriddenConfig
+      .command()
+      .handler("allow-noconfirm-once", overriddenConfig.ctx);
+    expect(overriddenConfig.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allow-noconfirm-once 🗜️ ",
+    );
+  });
+
+  it("keeps the grant armed through validation, availability, and queue failures", async () => {
+    const invalid = createHarness();
+    await invalid.command().handler("allow-noconfirm-once", invalid.ctx);
+    await expect(
+      confirmPreparation(invalid, { nextAction: "   " }),
+    ).rejects.toThrow("Supply one concrete next action");
+    expect(invalid.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allow-noconfirm-once 🗜️ ",
+    );
+    await expect(confirmPreparation(invalid)).resolves.toMatchObject({
+      details: { authorization: "one-shot-no-confirm" },
+    });
+
+    const unavailable = createHarness({ allowDecisionTool: false });
+    await unavailable
+      .command()
+      .handler("allow-noconfirm-once", unavailable.ctx);
+    await expect(confirmPreparation(unavailable)).rejects.toThrow(
+      "internal decision tool",
+    );
+    expect(unavailable.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allow-noconfirm-once 🗜️ ",
+    );
+
+    const queueFailure = createHarness();
+    await queueFailure
+      .command()
+      .handler("allow-noconfirm-once", queueFailure.ctx);
+    queueFailure.pi.sendMessage.mockImplementationOnce(() => {
+      throw new Error("one-shot queue failed");
+    });
+    await expect(confirmPreparation(queueFailure)).rejects.toThrow(
+      "one-shot queue failed",
+    );
+    expect(queueFailure.ctx.ui.setStatus).toHaveBeenLastCalledWith(
+      "pi-supercompact",
+      "supercompact: allow-noconfirm-once 🗜️ ",
+    );
+    await expect(confirmPreparation(queueFailure)).resolves.toMatchObject({
+      details: { authorization: "one-shot-no-confirm" },
+    });
+  });
+
+  it("does not arm while another workflow is active", async () => {
+    const harness = createHarness();
+    await harness.command().handler("force", harness.ctx);
+    await harness.command().handler("allow-noconfirm-once", harness.ctx);
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("already active"),
+      "warning",
+    );
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
+  });
+
+  it("abort, deny, and superseding commands clear an unused grant", async () => {
+    const aborted = createHarness();
+    await aborted.command().handler("allow-noconfirm-once", aborted.ctx);
+    await aborted.command().handler("abort", aborted.ctx);
+    expect(aborted.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Pending one-shot no-confirm permission was canceled.",
+      "info",
+    );
+    await expect(confirmPreparation(aborted)).rejects.toThrow(
+      /\/supercompact (run|allow|allow-noconfirm|allow-noconfirm-once)/,
+    );
+
+    const denied = createHarness();
+    await denied.command().handler("allow-noconfirm-once", denied.ctx);
+    await denied.command().handler("deny", denied.ctx);
+    await expect(confirmPreparation(denied)).rejects.toThrow(
+      "explicitly denied",
+    );
+
+    const run = createHarness();
+    await run.command().handler("allow-noconfirm-once", run.ctx);
+    await beginPreparation(run);
+    await confirmPreparation(run);
+    expect(run.ctx.ui.confirm).toHaveBeenCalledOnce();
+
+    const force = createHarness();
+    await force.command().handler("allow-noconfirm-once", force.ctx);
+    await force.command().handler("force", force.ctx);
+    expect(force.messages(SUMMARY_REQUEST_TYPE)[0].content).not.toContain(
+      "one-shot no-confirm permission",
+    );
+
+    const allowed = createHarness();
+    await allowed.command().handler("allow-noconfirm-once", allowed.ctx);
+    await allowed.command().handler("allow", allowed.ctx);
+    await confirmPreparation(allowed);
+    expect(allowed.ctx.ui.confirm).toHaveBeenCalledOnce();
+
+    const noConfirm = createHarness();
+    await noConfirm.command().handler("allow-noconfirm-once", noConfirm.ctx);
+    await noConfirm.command().handler("allow-noconfirm", noConfirm.ctx);
+    await expect(confirmPreparation(noConfirm)).resolves.toMatchObject({
+      details: { authorization: "session-no-confirm" },
+    });
+  });
+
+  it("lifecycle replacement clears rather than persists an unused grant", async () => {
+    for (const event of [
+      { name: "session_start", payload: { reason: "reload" } },
+      { name: "session_start", payload: { reason: "resume" } },
+      { name: "session_shutdown", payload: {} },
+    ]) {
+      const harness = createHarness();
+      await harness.command().handler("allow-noconfirm-once", harness.ctx);
+      expect(harness.pi.appendEntry).not.toHaveBeenCalled();
+      harness.handlers.get(event.name)?.(event.payload, harness.ctx);
+      expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+        "Pending one-shot no-confirm permission was canceled.",
+        "info",
+      );
+      await expect(confirmPreparation(harness)).rejects.toThrow(
+        "not authorized",
+      );
+    }
+  });
+
+  it("works headlessly with stable schemas and preserves authorization metadata", async () => {
+    const harness = createHarness({ hasUI: false });
+    const initialTools = harness.activeTools();
+    await harness.command().handler("allow-noconfirm-once", harness.ctx);
+    const result = await confirmPreparation(harness, {
+      extraContext: "retain the one-shot boundary",
+    });
+
+    expect(result).toMatchObject({
+      details: { authorization: "one-shot-no-confirm", status: "queued" },
+    });
+    expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
+    const summary = harness.messages(SUMMARY_REQUEST_TYPE)[0];
+    expect(summary.content).toContain(
+      "One-shot no-confirm permission authorized",
+    );
+    expect(summary.content).toContain(
+      "Authorization: one-shot no-confirm permission",
+    );
+    harness.handlers.get("message_end")?.(customMessage(summary), harness.ctx);
+    await compactSuccessfully(harness);
+    const restored = harness.messages(CONTEXT_MESSAGE_TYPE)[0];
+    expect(restored.details.preparation.authorization).toBe(
+      "one-shot-no-confirm",
+    );
+    expect(restored.content).toContain(
+      "Authorization: one-shot no-confirm permission",
+    );
     expect(harness.activeTools()).toEqual(initialTools);
     expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
   });

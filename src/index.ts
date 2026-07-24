@@ -22,7 +22,7 @@ const LEGACY_SUMMARY_PLACEHOLDER =
   "Super-summary prepared; compacting context.";
 const MAX_SUMMARY_ATTEMPTS = 3;
 const USAGE =
-  "Usage: /supercompact [run [extra context] | force [extra context] | allow | allow-noconfirm | deny | abort]";
+  "Usage: /supercompact [run [extra context] | force [extra context] | allow | allow-noconfirm | allow-noconfirm-once | deny | abort]";
 
 export type ContinuationAction = "continue" | "stop";
 
@@ -36,7 +36,8 @@ export interface ConfirmedPreparationContext {
   authorization?:
     | "session-no-confirm"
     | "configured-no-confirm"
-    | "prepared-no-confirm";
+    | "prepared-no-confirm"
+    | "one-shot-no-confirm";
   expectedContinuation: ContinuationAction;
   nextAction: string;
   runExtraContext?: string;
@@ -67,6 +68,10 @@ interface PreparationGrant {
   requiresConfirmation: boolean;
   consumed: boolean;
   revoked: boolean;
+}
+
+interface OneShotNoConfirmGrant {
+  id: string;
 }
 
 interface SupercompactRequest {
@@ -225,6 +230,9 @@ function noConfirmAuthorizationLabel(
   }
   if (authorization === "configured-no-confirm") {
     return "configured no-confirm permission";
+  }
+  if (authorization === "one-shot-no-confirm") {
+    return "one-shot no-confirm permission";
   }
   return "prepared /supercompact run no-confirm authorization";
 }
@@ -581,6 +589,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   let configuredRequireConfirmation = true;
   let sessionPermissionOverride: SessionPermissionOverride | undefined;
   let preparationGrant: PreparationGrant | undefined;
+  let oneShotNoConfirmGrant: OneShotNoConfirmGrant | undefined;
   let confirmationId: string | undefined;
   let confirmationAbortController: AbortController | undefined;
   let confirmationRevoked = false;
@@ -597,11 +606,13 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         ? "supercompact: awaiting confirmation 🗜️ "
         : preparationGrant && !preparationGrant.consumed
           ? "supercompact: preparing 🗜️ "
-          : sessionPermissionOverride === "allowed-noconfirm"
-            ? "supercompact: allow-noconfirm 🗜️ "
-            : sessionPermissionOverride === "allowed"
-              ? "supercompact: allow 🗜️ "
-              : undefined;
+          : oneShotNoConfirmGrant
+            ? "supercompact: allow-noconfirm-once 🗜️ "
+            : sessionPermissionOverride === "allowed-noconfirm"
+              ? "supercompact: allow-noconfirm 🗜️ "
+              : sessionPermissionOverride === "allowed"
+                ? "supercompact: allow 🗜️ "
+                : undefined;
     ctx.ui.setStatus(STATUS_KEY, status);
   };
 
@@ -945,8 +956,17 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   const resolveAuthorization = (): {
     permission: AgentPermission;
     grantId?: string;
+    oneShotGrantId?: string;
     noConfirmAuthorization?: NoConfirmAuthorization;
   } => {
+    if (oneShotNoConfirmGrant) {
+      return {
+        permission: "allowed-noconfirm",
+        oneShotGrantId: oneShotNoConfirmGrant.id,
+        noConfirmAuthorization: "one-shot-no-confirm",
+      };
+    }
+
     const grant =
       preparationGrant &&
       !preparationGrant.consumed &&
@@ -987,7 +1007,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     name: AGENT_TOOL_NAME,
     label: "Supercompact",
     description:
-      "Always-visible interface for requesting supercompaction; availability does not imply authorization and never grants its own authority. Complete the focused preparation checks first: refresh relevant durable context, close authorized work when safe, surface blockers or missing input, verify or persist work when applicable, choose continue or stop, and identify one exact next action. Final user confirmation is normally required; configured or explicit live-session no-confirm permission may waive only that dialog. Call after a hidden /supercompact run preparation request, or when the conversation makes supercompaction appropriate and agent-request permission may exist. The execution result explains whether authorization is absent, confirmation is required, or no-confirm permission queued the workflow. Do not repeatedly retry a denied, declined, revoked, busy, unavailable, or confirmation-required headless request.",
+      "Always-visible interface for requesting supercompaction; availability does not imply authorization and never grants its own authority. Complete the focused preparation checks first: refresh relevant durable context, close authorized work when safe, surface blockers or missing input, verify or persist work when applicable, choose continue or stop, and identify one exact next action. Final user confirmation is normally required; configured, explicit live-session, or one-shot no-confirm permission may waive only that dialog. Call after a hidden /supercompact run preparation request, or when the conversation makes supercompaction appropriate and agent-request permission may exist. The execution result explains whether authorization is absent, confirmation is required, or no-confirm permission queued the workflow. Do not repeatedly retry a denied, declined, revoked, busy, unavailable, or confirmation-required headless request.",
     parameters: AgentToolParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -1006,15 +1026,15 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       if (authorization.permission === "denied") {
         throw new Error(
           sessionPermissionOverride === "denied"
-            ? "The user explicitly denied agent supercompaction requests for this live session. Only the user can reauthorize with /supercompact run, /supercompact allow, or /supercompact allow-noconfirm. Do not retry automatically; wait for the user."
-            : "Agent-triggered supercompaction is not authorized. The user must run /supercompact run for a prepared one-off request, /supercompact allow for confirmation-required live-session permission, or /supercompact allow-noconfirm for live-session permission without the final dialog. Do not retry automatically; wait for the user.",
+            ? "The user explicitly denied agent supercompaction requests for this live session. Only the user can reauthorize with /supercompact run, /supercompact allow, /supercompact allow-noconfirm, or /supercompact allow-noconfirm-once. Do not retry automatically; wait for the user."
+            : "Agent-triggered supercompaction is not authorized. The user must run /supercompact run for a prepared one-off request, /supercompact allow for confirmation-required live-session permission, /supercompact allow-noconfirm for live-session permission without the final dialog, or /supercompact allow-noconfirm-once for one request without the dialog. Do not retry automatically; wait for the user.",
         );
       }
       const bypassConfirmation =
         authorization.permission === "allowed-noconfirm";
       if (!ctx.hasUI && !bypassConfirmation) {
         throw new Error(
-          "Agent-triggered supercompaction requires TUI or RPC confirmation in the current permission mode. The user must invoke /supercompact force explicitly or enable /supercompact allow-noconfirm. Do not retry automatically.",
+          "Agent-triggered supercompaction requires TUI or RPC confirmation in the current permission mode. The user must invoke /supercompact force explicitly, enable /supercompact allow-noconfirm, or arm /supercompact allow-noconfirm-once. Do not retry automatically.",
         );
       }
 
@@ -1028,6 +1048,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         );
       }
       const grantId = authorization.grantId;
+      const oneShotGrantId = authorization.oneShotGrantId;
       const preparation: ConfirmedPreparationContext = {
         ...(authorization.noConfirmAuthorization
           ? { authorization: authorization.noConfirmAuthorization }
@@ -1047,11 +1068,12 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         if (
           currentAuthorization.permission !== "allowed-noconfirm" ||
           currentAuthorization.grantId !== grantId ||
+          currentAuthorization.oneShotGrantId !== oneShotGrantId ||
           currentAuthorization.noConfirmAuthorization !==
             authorization.noConfirmAuthorization
         ) {
           throw new Error(
-            "Supercompaction authorization expired before execution began. Do not retry automatically; wait for the user to reauthorize with /supercompact run, /supercompact allow, or /supercompact allow-noconfirm.",
+            "Supercompaction authorization expired before execution began. Do not retry automatically; wait for the user to reauthorize with /supercompact run, /supercompact allow, /supercompact allow-noconfirm, or /supercompact allow-noconfirm-once.",
           );
         }
 
@@ -1062,6 +1084,11 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
           }
           updateStatus(ctx);
           throw new Error(result.reason);
+        }
+
+        if (oneShotGrantId && oneShotNoConfirmGrant?.id === oneShotGrantId) {
+          oneShotNoConfirmGrant = undefined;
+          updateStatus(ctx);
         }
 
         const authorizationSubject = noConfirmAuthorizationSubject(
@@ -1244,9 +1271,11 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     const canceledPreparation = Boolean(
       (preparationGrant && !preparationGrant.consumed) || confirmationId,
     );
+    const canceledOneShotPermission = Boolean(oneShotNoConfirmGrant);
     clearDecisionState(ctx);
     request = undefined;
     preparationGrant = undefined;
+    oneShotNoConfirmGrant = undefined;
     confirmationAbortController?.abort();
     confirmationId = undefined;
     confirmationAbortController = undefined;
@@ -1261,15 +1290,20 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     if (canceledPreparation) {
       notify(ctx, "Pending pre-compaction preparation was canceled.");
     }
+    if (canceledOneShotPermission) {
+      notify(ctx, "Pending one-shot no-confirm permission was canceled.");
+    }
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
     const canceledPreparation = Boolean(
       (preparationGrant && !preparationGrant.consumed) || confirmationId,
     );
+    const canceledOneShotPermission = Boolean(oneShotNoConfirmGrant);
     clearDecisionState(ctx);
     request = undefined;
     preparationGrant = undefined;
+    oneShotNoConfirmGrant = undefined;
     confirmationAbortController?.abort();
     confirmationId = undefined;
     confirmationAbortController = undefined;
@@ -1280,6 +1314,9 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     updateStatus(ctx);
     if (canceledPreparation) {
       notify(ctx, "Pending pre-compaction preparation was canceled.");
+    }
+    if (canceledOneShotPermission) {
+      notify(ctx, "Pending one-shot no-confirm permission was canceled.");
     }
   });
 
@@ -1509,10 +1546,23 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     }
   });
 
+  const clearOneShotNoConfirmGrant = (ctx: ExtensionContext): boolean => {
+    if (!oneShotNoConfirmGrant) return false;
+    oneShotNoConfirmGrant = undefined;
+    updateStatus(ctx);
+    return true;
+  };
+
+  const supersedeOneShotNoConfirmGrant = (ctx: ExtensionContext): void => {
+    if (!clearOneShotNoConfirmGrant(ctx)) return;
+    notify(ctx, "Pending one-shot no-confirm permission was canceled.");
+  };
+
   const startPreparation = (
     extraContext: string,
     ctx: ExtensionContext,
   ): void => {
+    supersedeOneShotNoConfirmGrant(ctx);
     const requiresConfirmation =
       sessionPermissionOverride === "allowed"
         ? true
@@ -1590,6 +1640,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   };
 
   const startForce = (extraContext: string, ctx: ExtensionContext): void => {
+    supersedeOneShotNoConfirmGrant(ctx);
     if (confirmationId) {
       notify(
         ctx,
@@ -1643,6 +1694,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   };
 
   const allowAgentRequests = (ctx: ExtensionContext): void => {
+    supersedeOneShotNoConfirmGrant(ctx);
     const alreadyAllowed = sessionPermissionOverride === "allowed";
     sessionPermissionOverride = "allowed";
     if (!alreadyAllowed) persistSessionPermissionOverride();
@@ -1658,6 +1710,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   const allowAgentRequestsWithoutConfirmation = (
     ctx: ExtensionContext,
   ): void => {
+    supersedeOneShotNoConfirmGrant(ctx);
     const alreadyAllowed = sessionPermissionOverride === "allowed-noconfirm";
     sessionPermissionOverride = "allowed-noconfirm";
     if (!alreadyAllowed) persistSessionPermissionOverride();
@@ -1670,10 +1723,50 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     );
   };
 
+  const allowAgentRequestsWithoutConfirmationOnce = (
+    ctx: ExtensionContext,
+  ): void => {
+    if (request || confirmationId || preparationGrant) {
+      notify(
+        ctx,
+        "A supercompact preparation, confirmation, or compaction is already active; one-shot no-confirm permission was not armed.",
+        "warning",
+      );
+      return;
+    }
+    if (oneShotNoConfirmGrant) {
+      notify(
+        ctx,
+        "One-shot no-confirm permission is already armed.",
+        "warning",
+      );
+      return;
+    }
+    if (effectivePermission() === "allowed-noconfirm") {
+      notify(
+        ctx,
+        "Agent supercompaction requests are already allowed without confirmation by the effective configured or live-session permission; one-shot permission was not armed.",
+        "warning",
+      );
+      return;
+    }
+
+    oneShotNoConfirmGrant = { id: createId() };
+    updateStatus(ctx);
+    notifyPermission(
+      ctx,
+      "One-shot no-confirm permission is armed for the next valid agent supercompaction request. It will be consumed when canonical-summary work is successfully queued.",
+    );
+  };
+
   const denyAgentRequests = (ctx: ExtensionContext): void => {
     const permissionWasDenied = sessionPermissionOverride === "denied";
+    const canceledOneShotPermission = clearOneShotNoConfirmGrant(ctx);
     const wasAlreadyDenied =
-      permissionWasDenied && !preparationGrant && !confirmationId;
+      permissionWasDenied &&
+      !preparationGrant &&
+      !confirmationId &&
+      !canceledOneShotPermission;
     sessionPermissionOverride = "denied";
     if (!permissionWasDenied) persistSessionPermissionOverride();
 
@@ -1690,6 +1783,9 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
 
     if (canceledConfirmation || canceledPreparation) {
       notify(ctx, "Pending pre-compaction preparation was canceled.");
+    }
+    if (canceledOneShotPermission) {
+      notify(ctx, "Pending one-shot no-confirm permission was canceled.");
     }
     notifyPermission(
       ctx,
@@ -1713,9 +1809,15 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     }
 
     const hadPreparation = Boolean(preparationGrant);
+    const hadOneShotPermission = Boolean(oneShotNoConfirmGrant);
     const hadConfirmation = Boolean(confirmationId);
     const hadRequest = Boolean(request);
-    if (!hadPreparation && !hadConfirmation && !hadRequest) {
+    if (
+      !hadPreparation &&
+      !hadOneShotPermission &&
+      !hadConfirmation &&
+      !hadRequest
+    ) {
       notify(ctx, "No supercompaction is active.", "error");
       return;
     }
@@ -1729,10 +1831,16 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     confirmationRevoked = false;
     if (preparationGrant) preparationGrant.revoked = true;
     preparationGrant = undefined;
+    oneShotNoConfirmGrant = undefined;
     request = undefined;
     clearDecisionState(ctx);
     updateStatus(ctx);
-    notify(ctx, "Supercompaction was aborted before native compaction began.");
+    notify(
+      ctx,
+      hadOneShotPermission && !hadPreparation && !hadConfirmation && !hadRequest
+        ? "Pending one-shot no-confirm permission was canceled."
+        : "Supercompaction was aborted before native compaction began.",
+    );
     if (shouldAbortAgentTurn) ctx.abort();
   };
 
@@ -1756,6 +1864,8 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     const allow = "Allow agent requests with confirmation for this session";
     const allowNoConfirm =
       "Allow agent requests without confirmation for this session";
+    const allowNoConfirmOnce =
+      "Allow the next agent request without confirmation";
     const deny = "Deny agent supercompaction requests for this session";
     const abort = "Abort active pre-native supercompaction";
     const cancel = "Cancel";
@@ -1764,6 +1874,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       force,
       allow,
       allowNoConfirm,
+      allowNoConfirmOnce,
       deny,
       abort,
       cancel,
@@ -1785,6 +1896,8 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       allowAgentRequests(ctx);
     } else if (choice === allowNoConfirm) {
       allowAgentRequestsWithoutConfirmation(ctx);
+    } else if (choice === allowNoConfirmOnce) {
+      allowAgentRequestsWithoutConfirmationOnce(ctx);
     } else if (choice === deny) {
       denyAgentRequests(ctx);
     } else if (choice === abort) {
@@ -1801,6 +1914,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         "force",
         "allow",
         "allow-noconfirm",
+        "allow-noconfirm-once",
         "deny",
         "abort",
       ];
@@ -1828,6 +1942,8 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         allowAgentRequests(ctx);
       } else if (action === "allow-noconfirm" && !remainder) {
         allowAgentRequestsWithoutConfirmation(ctx);
+      } else if (action === "allow-noconfirm-once" && !remainder) {
+        allowAgentRequestsWithoutConfirmationOnce(ctx);
       } else if (action === "deny" && !remainder) {
         denyAgentRequests(ctx);
       } else if (action === "abort" && !remainder) {

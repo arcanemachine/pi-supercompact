@@ -2,7 +2,7 @@
 
 A [Pi](https://pi.dev) extension for deliberate, loss-resistant context compaction.
 
-It provides a focused pre-compaction checkpoint, configurable final confirmation for agent requests, a canonical full-context handoff, Pi native compaction, invisible handoff restoration, and conservative continuation of authorized work. Configuration or an explicit live-session mode can waive only the final confirmation dialog.
+It provides a focused pre-compaction checkpoint, configurable final confirmation for agent requests, one-shot and live-session no-confirm permission, a canonical full-context handoff, Pi native compaction, invisible handoff restoration, and conservative continuation of authorized work. No-confirm permission waives only the final confirmation dialog.
 
 ## Requirements
 
@@ -37,11 +37,12 @@ pi -e ./src/index.ts
 /supercompact force [extra context]
 /supercompact allow
 /supercompact allow-noconfirm
+/supercompact allow-noconfirm-once
 /supercompact deny
 /supercompact abort
 ```
 
-`/supercompact` opens a menu with preparation, force, confirmation-required allow, no-confirm allow, deny, and abort actions. Preparation and force open a multiline editor for optional context.
+`/supercompact` opens a menu with preparation, force, confirmation-required allow, live-session no-confirm allow, one-shot no-confirm allow, deny, and abort actions. Preparation and force open a multiline editor for optional context.
 
 ### Prepare normally
 
@@ -72,13 +73,27 @@ If user input is required, the agent asks and waits. The one-off authorization r
 
 `force` immediately starts the canonical summary and native compaction workflow. It bypasses preparation and final confirmation because the command itself is explicit user authorization. It remains available when agent requests are denied.
 
+### Allow one agent request without confirmation
+
+```text
+/supercompact allow-noconfirm-once
+```
+
+`allow-noconfirm-once` arms the next valid agent-requested supercompaction without starting preparation or compaction itself. The user can then instruct the agent to complete the normal focused preparation and request supercompaction. The grant temporarily overlays denied or confirmation-required configured or live-session permission without changing it. While armed, the status is `supercompact: allow-noconfirm-once 🗜️ `.
+
+The grant is consumed only after a valid request successfully queues canonical-summary work. Invalid arguments, unavailable tools, or a synchronous queueing failure leave it armed; once work is queued, a later abort or failure does not re-arm it. Consumption automatically reveals the prior configured or live-session permission and status.
+
+If effective configured or `/supercompact allow-noconfirm` permission already bypasses confirmation, the command warns and does not arm a redundant grant. An explicit confirmation-required or denied session override can still be overlaid even when underlying configuration allows no-confirm requests.
+
+The grant is in-memory only. Reloading, replacing, resuming, forking, or shutting down the session clears it, as do `abort`, `deny`, `run`, `force`, `allow`, and `allow-noconfirm`. The command refuses to arm while a preparation, confirmation, summary, or compaction workflow is active.
+
 ### Abort before native compaction
 
 ```text
 /supercompact abort
 ```
 
-`abort` cancels pending preparation, an open confirmation, or queued or active canonical-summary work before native compaction begins. It preserves configured and live-session permission and does not change either tool schema. Calling it with no abortable workflow reports `No supercompaction is active.` as an error.
+`abort` cancels pending preparation, an armed one-shot grant, an open confirmation, or queued or active canonical-summary work before native compaction begins. It preserves configured and persistent live-session permission and does not change either tool schema. Calling it with no abortable workflow or one-shot grant reports `No supercompaction is active.` as an error.
 
 Pi does not expose native compaction cancellation to extensions. Once native compaction begins, press Escape in the TUI or use the host's native cancellation mechanism when available.
 
@@ -86,9 +101,10 @@ Pi does not expose native compaction cancellation to extensions. Once native com
 
 - `/supercompact allow` permits agent requests with final confirmation for the current live extension session.
 - `/supercompact allow-noconfirm` permits agent requests without the final confirmation dialog for the current live extension session.
-- `/supercompact deny` revokes either mode and cancels an unused preparation or open confirmation.
+- `/supercompact allow-noconfirm-once` temporarily permits one request without the dialog, then restores the effective configured or live-session mode.
+- `/supercompact deny` revokes either persistent session mode and cancels an unused preparation, one-shot grant, or open confirmation.
 
-These commands update session-local permission and never write configuration. A context-excluded custom session entry restores the override and its status across `/reload`; it does not enter model context. Starting a new process, creating or resuming a session, or forking discards the override and reapplies configured denied, confirmation-required, or no-confirm permission.
+`allow`, `allow-noconfirm`, and `deny` update session-local permission and never write configuration. A context-excluded custom session entry restores that persistent override and its status across `/reload`; it does not enter model context. `allow-noconfirm-once` uses only transient in-memory state and is cleared by reload. Starting a new process, creating or resuming a session, or forking discards all runtime permission and reapplies configured denied, confirmation-required, or no-confirm permission.
 
 Confirmation-required permission lets an agent request supercompaction but still requires final TUI or RPC confirmation. No-confirm permission is stronger authorization: an agent request may queue the canonical summary and native compaction without another approval prompt. It skips only the dialog; preparation expectations, exact-next-action validation, concurrency and host-tool checks, summary validation, continuation constraints, bounded retries, compaction, filtering, restoration, and cleanup remain enforced.
 
@@ -121,7 +137,7 @@ With no live-session override:
 | `false`               | `true`                             | No confirm     | Confirm                   |
 | `true`                | `false`                            | Confirm        | No confirm                |
 
-`/supercompact allow` and `/supercompact allow-noconfirm` explicitly override confirmation behavior for authorized agent-tool execution during the live session. `/supercompact deny` blocks unprepared requests but does not prevent the user from creating a later one-off `run` grant. `/supercompact force` always remains immediate and dialog-free.
+`/supercompact allow` and `/supercompact allow-noconfirm` explicitly override confirmation behavior for authorized agent-tool execution during the live session. `/supercompact allow-noconfirm-once` overlays either mode or configured policy for one successfully queued request without mutating it. `/supercompact deny` blocks unprepared requests but does not prevent the user from creating a later one-off `run` or no-confirm grant. `/supercompact force` always remains immediate and dialog-free.
 
 Missing request permission remains denied. Confirmation properties never grant permission. A recognized property with a non-boolean value makes that configuration invalid; invalid configuration fails closed to denied requests with confirmation required and warns when UI is available.
 
@@ -132,9 +148,9 @@ The extension registers these tools once when it loads and keeps their schemas a
 - `supercompact` — the public request interface
 - `record_supercompact_decision` — internal canonical-summary workflow control
 
-Tool visibility does not grant authority. The public tool checks effective session permission or an unused `run` grant, workflow and confirmation state, internal-tool availability, exact-next-action validity, UI capability when the active mode requires it, and authorization again at the last applicable boundary. The internal tool accepts a call only during the canonical-summary phase with a valid non-empty handoff, exactly one decision call, no other tool calls, and all confirmed stop constraints intact.
+Tool visibility does not grant authority. The public tool checks effective session permission, an unused `run` grant, or an armed one-shot no-confirm grant; workflow and confirmation state; internal-tool availability; exact-next-action validity; UI capability when the active mode requires it; and authorization again at the last applicable boundary. The internal tool accepts a call only during the canonical-summary phase with a valid non-empty handoff, exactly one decision call, no other tool calls, and all confirmed stop constraints intact.
 
-The extension never changes Pi's active tool selection to enforce permission. If the user or host excludes a required extension tool, the extension respects that choice. `run` and `force` fail before creating workflow state when required tools are unavailable, and explain that the tool must be re-enabled or the extension reloaded with its tools available. `allow`, `allow-noconfirm`, and `deny` still update session-local permission while reporting that execution remains unavailable. `abort` never changes the active tool selection.
+The extension never changes Pi's active tool selection to enforce permission. If the user or host excludes a required extension tool, the extension respects that choice. `run` and `force` fail before creating workflow state when required tools are unavailable, and explain that the tool must be re-enabled or the extension reloaded with its tools available. `allow`, `allow-noconfirm`, `allow-noconfirm-once`, and `deny` still update or arm session-local permission while reporting that execution remains unavailable. `abort` never changes the active tool selection.
 
 ## How it works
 
@@ -194,14 +210,15 @@ Operational status text is shown while the extension is preparing or awaiting co
 - `supercompact: preparing 🗜️ `
 - `supercompact: awaiting confirmation 🗜️ `
 
-Explicit live-session permission overrides add one of these status items:
+Explicit live-session permission and an armed one-shot grant add one of these status items:
 
 - `supercompact: allow 🗜️ `
 - `supercompact: allow-noconfirm 🗜️ `
+- `supercompact: allow-noconfirm-once 🗜️ `
 
-Every status string includes a trailing space after the emoji to separate adjacent status items. Configured permission is intentionally silent in the status area. `/deny` clears any live-session permission status, while a later `/allow` or `/allow-noconfirm` displays the new explicit override.
+Every status string includes a trailing space after the emoji to separate adjacent status items. Configured permission is intentionally silent in the status area. Consuming or canceling a one-shot grant reveals the prior live-session status. `/deny` clears any live-session permission status, while a later `/allow` or `/allow-noconfirm` displays the new explicit override.
 
-`run`, `allow`, `allow-noconfirm`, `deny`, `abort`, confirmation, no-confirm execution, summary entry, settlement, and cleanup do not change the extension's active tool vector. This removes extension-caused mid-session schema invalidation and preserves an otherwise reusable prompt-cache prefix.
+`run`, `allow`, `allow-noconfirm`, `allow-noconfirm-once`, `deny`, `abort`, confirmation, no-confirm execution, summary entry, settlement, and cleanup do not change the extension's active tool vector. This removes extension-caused mid-session schema invalidation and preserves an otherwise reusable prompt-cache prefix.
 
 It does not guarantee provider cache hits. Cache expiration, provider policy, model changes, unrelated extensions, host tool selection, system-prompt changes, and conversation-prefix differences can still cause misses.
 
@@ -212,8 +229,8 @@ Completed or canceled preparation-control messages, stale summary requests, dupl
 - TUI and RPC modes support the final confirmation dialog.
 - `force` works in print and JSON modes because it is explicit authorization.
 - `run` stops before preparation when its effective confirmation mode requires UI; configured or live-session no-confirm mode works headlessly.
-- `allow`, `allow-noconfirm`, and `deny` update session-local permission headlessly.
-- Confirmation-required agent execution fails closed without confirmation UI; no-confirm execution works headlessly while retaining every non-dialog guard.
+- `allow`, `allow-noconfirm`, `allow-noconfirm-once`, and `deny` update or arm session-local permission headlessly.
+- Confirmation-required agent execution fails closed without confirmation UI; configured, live-session, prepared-run, and one-shot no-confirm execution work headlessly while retaining every non-dialog guard.
 - The bare menu requires TUI or RPC mode.
 
 ### Failure behavior
@@ -228,7 +245,7 @@ The workflow is bounded and leaves the session usable:
 - `/supercompact abort` cancels extension-controlled work before native compaction; idle use reports an error.
 - Aborted, errored, truncated, or unusable summary turns never start manual compaction and do not discard the active workflow.
 - Native compaction failure prevents final context restoration, and active native compaction must be canceled through Escape or the host.
-- Queueing and compaction failures preserve the specific reason and do not retry automatically.
+- Queueing and compaction failures preserve the specific reason and do not retry automatically; a one-shot grant is retained only when canonical-summary work was never successfully queued.
 - Every exit path restores Pi's working message and clears confirmation and decision state without changing tool schemas.
 - Native compaction that already completed cannot be rolled back.
 
