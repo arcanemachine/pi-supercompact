@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep canonical-summary requests active across failed, aborted, truncated, unusable, or metadata-invalid assistant turns so normal retries and resends can complete the existing workflow.
+- Distinguish the transient summary spinner as `Summarizing…` from the one-time creation notification.
+
 ## 0.2.0 - 2026-07-22
 
 - Provide `/supercompact run`, `/supercompact force`, `/supercompact allow`, `/supercompact allow-noconfirm`, `/supercompact deny`, and `/supercompact abort` for preparation, explicit immediate execution, request permission, and pre-native cancellation.

@@ -222,11 +222,11 @@ The workflow is bounded and leaves the session usable:
 
 - Concurrent preparation, confirmation, and compaction requests receive state-specific guidance.
 - Revocation or lifecycle replacement while confirmation is open prevents compaction.
-- Invalid decision arguments use Pi's normal correction loop.
-- If the model omits decision metadata, the extension requests it once without repeating the summary.
-- Summary and metadata retries are bounded.
+- Invalid decision arguments use Pi's normal correction loop without making the workflow terminal.
+- If the model omits decision metadata, the extension requests it again without repeating the summary while the automatic correction budget remains.
+- Automatic decision nudges are bounded, but an unsuccessful assistant turn leaves the workflow active for a later retry or resend.
 - `/supercompact abort` cancels extension-controlled work before native compaction; idle use reports an error.
-- Aborted, errored, truncated, or unusable summaries stop before manual compaction.
+- Aborted, errored, truncated, or unusable summary turns never start manual compaction and do not discard the active workflow.
 - Native compaction failure prevents final context restoration, and active native compaction must be canceled through Escape or the host.
 - Queueing and compaction failures preserve the specific reason and do not retry automatically.
 - Every exit path restores Pi's working message and clears confirmation and decision state without changing tool schemas.

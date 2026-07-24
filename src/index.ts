@@ -74,12 +74,10 @@ interface SupercompactRequest {
   phase: RequestPhase;
   compactionCompleted: boolean;
   attempts: number;
-  correctionSent: boolean;
   currentBatchValid: boolean;
   preparation?: ConfirmedPreparationContext;
   action?: ContinuationAction;
   summary?: string;
-  error?: string;
 }
 
 interface SummaryRequestDetails {
@@ -776,7 +774,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
 
       request.action = params.continuation;
       request.phase = "summary-ready";
-      request.error = undefined;
       clearDecisionState(ctx);
       const outcomeMessage =
         params.continuation === "continue"
@@ -838,7 +835,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       phase: "queued",
       compactionCompleted: false,
       attempts: 0,
-      correctionSent: false,
       currentBatchValid: false,
       preparation,
     };
@@ -1417,29 +1413,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     };
   });
 
-  pi.on("tool_result", (event, ctx) => {
-    if (
-      request?.phase !== "awaiting-summary" ||
-      !event.isError ||
-      request.attempts < MAX_SUMMARY_ATTEMPTS
-    ) {
-      return;
-    }
-
-    request.error = `the continuation decision remained invalid after ${MAX_SUMMARY_ATTEMPTS} attempts; the workflow stopped without starting compaction`;
-    clearDecisionState(ctx);
-    ctx.abort();
-    return {
-      content: [
-        {
-          type: "text",
-          text: `The continuation decision remained invalid after ${MAX_SUMMARY_ATTEMPTS} attempts. The supercompact workflow stopped without starting compaction. Do not retry automatically.`,
-        },
-      ],
-      isError: true,
-    };
-  });
-
   pi.on("message_end", (event, ctx) => {
     if (!request) return;
 
@@ -1449,7 +1422,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       requestIdFromDetails(event.message.details) === request.id
     ) {
       request.phase = "awaiting-summary";
-      setWorkingMessage(ctx, "Creating super-summary…");
+      setWorkingMessage(ctx, "Summarizing…");
       return;
     }
 
@@ -1460,24 +1433,16 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    request.attempts += 1;
-    if (request.attempts > MAX_SUMMARY_ATTEMPTS) {
-      request.error = `the summary remained invalid after ${MAX_SUMMARY_ATTEMPTS} attempts`;
-      clearDecisionState(ctx);
-      ctx.abort();
-      return;
-    }
-
     if (
       event.message.stopReason === "aborted" ||
       event.message.stopReason === "error" ||
       event.message.stopReason === "length"
     ) {
-      request.error = `summary response ended with ${event.message.stopReason}`;
       request.currentBatchValid = false;
       return;
     }
 
+    request.attempts += 1;
     const summary = textFromAssistant(event.message);
     if (!request.summary && summary) request.summary = summary;
 
@@ -1490,7 +1455,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
 
     request.currentBatchValid =
       toolCalls.length === 1 && toolCalls[0].name === DECISION_TOOL_NAME;
-    request.error = undefined;
   });
 
   pi.on("session_compact", () => {
@@ -1501,18 +1465,11 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     if (!request) return;
 
     if (request.phase === "queued" || request.phase === "awaiting-summary") {
-      if (request.error) {
-        fail(ctx, request.error);
-        return;
-      }
-
       if (
         request.phase === "awaiting-summary" &&
         request.summary &&
-        !request.correctionSent &&
         request.attempts < MAX_SUMMARY_ATTEMPTS
       ) {
-        request.correctionSent = true;
         request.currentBatchValid = false;
         try {
           pi.sendMessage(
@@ -1530,12 +1487,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         return;
       }
 
-      fail(
-        ctx,
-        request.summary
-          ? "the summary turn settled without a valid continuation decision"
-          : "the summary turn settled without a usable summary",
-      );
+      clearDecisionState(ctx);
       return;
     }
 

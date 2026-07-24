@@ -1712,6 +1712,73 @@ describe("preserved workflow regressions", () => {
     expect(options).toEqual({ triggerTurn: true, deliverAs: "steer" });
   });
 
+  it.each(["aborted", "error", "length"])(
+    "keeps the summary workflow active after a %s response",
+    async (stopReason) => {
+      const harness = createHarness();
+      const summaryRequest = await beginForceSummary(harness);
+      harness.handlers.get("message_end")?.(
+        assistantMessage("", [], stopReason),
+        harness.ctx,
+      );
+      harness.handlers.get("agent_settled")?.({}, harness.ctx);
+
+      expect(harness.ctx.abort).not.toHaveBeenCalled();
+      expect(harness.ctx.ui.notify).not.toHaveBeenCalledWith(
+        expect.stringContaining("Supercompact failed"),
+        "error",
+      );
+      expect(
+        harness.handlers.get("context")?.(
+          {
+            type: "context",
+            messages: [customMessage(summaryRequest).message],
+          },
+          harness.ctx,
+        ),
+      ).toBeUndefined();
+
+      await recordSummaryDecision(harness, "stop");
+      harness.handlers.get("agent_settled")?.({}, harness.ctx);
+      expect(harness.ctx.compact).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps requesting omitted continuation metadata without failing the workflow", async () => {
+    const harness = createHarness();
+    await beginForceSummary(harness);
+
+    harness.handlers.get("message_end")?.(
+      assistantMessage("## State\nCaptured."),
+      harness.ctx,
+    );
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(2);
+
+    harness.handlers.get("message_end")?.(assistantMessage(""), harness.ctx);
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(3);
+
+    harness.handlers.get("message_end")?.(assistantMessage(""), harness.ctx);
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(3);
+    expect(harness.ctx.abort).not.toHaveBeenCalled();
+    expect(harness.ctx.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("Supercompact failed"),
+      "error",
+    );
+
+    harness.handlers.get("message_end")?.(
+      assistantMessage("", [
+        { id: "decision-recovered", arguments: { continuation: "stop" } },
+      ]),
+      harness.ctx,
+    );
+    await executeDecision(harness, "stop", "decision-recovered");
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+    expect(harness.ctx.compact).toHaveBeenCalledOnce();
+  });
+
   it("preserves decision validation errors for correction", async () => {
     const harness = createHarness();
     await beginForceSummary(harness);
@@ -1735,10 +1802,9 @@ describe("preserved workflow regressions", () => {
     ).resolves.toMatchObject({ terminate: true });
   });
 
-  it("bounds invalid metadata retries and stops before compaction", async () => {
+  it("keeps invalid metadata recoverable after bounded automatic attempts", async () => {
     const harness = createHarness();
     await beginForceSummary(harness);
-    let boundedResult: any;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       harness.handlers.get("message_end")?.(
         assistantMessage(attempt === 1 ? "## State\nBounded." : "", [
@@ -1749,24 +1815,24 @@ describe("preserved workflow regressions", () => {
         ]),
         harness.ctx,
       );
-      boundedResult = harness.handlers.get("tool_result")?.(
-        toolResultMessage(`invalid-${attempt}`, { isError: true }),
-        harness.ctx,
-      );
+      expect(
+        harness.handlers.get("tool_result")?.(
+          toolResultMessage(`invalid-${attempt}`, { isError: true }),
+          harness.ctx,
+        ),
+      ).toBeUndefined();
     }
-    expect(boundedResult).toMatchObject({
-      isError: true,
-      content: [
-        {
-          text: expect.stringContaining(
-            "workflow stopped without starting compaction",
-          ),
-        },
-      ],
-    });
-    expect(harness.ctx.abort).toHaveBeenCalledOnce();
+
+    expect(harness.ctx.abort).not.toHaveBeenCalled();
+    harness.handlers.get("message_end")?.(
+      assistantMessage("", [
+        { id: "decision-recovered", arguments: { continuation: "stop" } },
+      ]),
+      harness.ctx,
+    );
+    await executeDecision(harness, "stop", "decision-recovered");
     harness.handlers.get("agent_settled")?.({}, harness.ctx);
-    expect(harness.ctx.compact).not.toHaveBeenCalled();
+    expect(harness.ctx.compact).toHaveBeenCalledOnce();
     expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
     expect(harness.activeTools()).toContain(DECISION_TOOL_NAME);
   });
