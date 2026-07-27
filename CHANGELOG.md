@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.3.1 - 2026-07-27
+
+- Fix logo
+
 ## 0.3.0 - 2026-07-27
 
 - Add `/supercompact allow-noconfirm-once` as a non-persistent overlay for one successfully queued agent request, with automatic restoration, redundant-permission warnings, lifecycle and superseding-command cancellation, headless support, and unchanged workflow guards.
