@@ -14,7 +14,8 @@
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/arcanemachine/pi-supercompact/main/logo.jpg"
   },
   "scripts": {
     "build": "tsc",

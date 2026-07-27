@@ -1,5 +1,9 @@
 # pi-supercompact
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/arcanemachine/pi-supercompact/main/logo.jpg" alt="pi-supercompact logo" width="250" />
+</p>
+
 A [Pi](https://pi.dev) extension for deliberate, loss-resistant context compaction.
 
 It provides a focused pre-compaction checkpoint, configurable final confirmation for agent requests, one-shot and live-session no-confirm permission, a canonical full-context handoff, Pi native compaction, invisible handoff restoration, and conservative continuation of authorized work. No-confirm permission waives only the final confirmation dialog.
