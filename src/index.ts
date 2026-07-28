@@ -435,6 +435,11 @@ export function buildPreparationPrompt(
     "- Resolve issues within existing authorization. Surface material blockers or decisions prominently; if user input is required, ask and wait without requesting supercompaction.",
     "- Distinguish real remaining work from optional improvements or speculative follow-ups.",
     "- Establish whether work should continue or stop after compaction. If continuing, identify one exact immediate next action that remains authorized and needs no additional input.",
+    ...(automatic
+      ? [
+          "- Automatic supercompact was triggered by context usage and may have interrupted active work. Preserve momentum: choose continue when authorized work is clearly unfinished and can proceed without new user input, and preserve the active objective, constraints, progress, and one exact next action through compaction. Choose stop only when work is complete, blocked, awaiting user input or approval, or continuation would be unsafe or uncertain. Do not invent, broaden, or continue optional work merely to avoid stopping.",
+        ]
+      : []),
     "- Re-read changed material when applicable and make a final accuracy pass.",
     "",
     `When the boundary is clean and unambiguous, call ${AGENT_TOOL_NAME} with the expected continuation, exact next action, and any additional summary emphasis. ${automatic ? "Automatic supercompact authorization is already active; no confirmation dialog will open." : "Final user confirmation is normally required before native compaction begins; configured or explicit live-session no-confirm permission may waive only that dialog."}`,
@@ -475,7 +480,7 @@ export function buildSummaryPrompt(
         `Preserve the ${preparation.authorization ? "authorized" : "confirmed"} intent, exact next action, and any conservative downgrade to stop in the canonical handoff.`,
       ].join("\n")
     : automaticForce
-      ? "Automatic supercompact reached its force threshold. No user supplied extra context or confirmed a preparation outcome. Preserve current authorized scope and choose continuation conservatively."
+      ? "Automatic supercompact reached its force threshold. No user supplied extra context or confirmed a preparation outcome. Automatic supercompact was triggered by context usage and may have interrupted active work. Preserve momentum: choose continue when authorized work is clearly unfinished and can proceed without new user input, and preserve the active objective, constraints, progress, and one exact next action through compaction. Choose stop only when work is complete, blocked, awaiting user input or approval, or continuation would be unsafe or uncertain. Do not invent, broaden, or continue optional work merely to avoid stopping."
       : extraContext.trim()
         ? [
             "The user supplied the following extra context. It has highest priority when shaping the summary and continuation decision. Treat it as a continuation instruction only when it explicitly requests further work, continuation, resumption, stopping, or waiting:",

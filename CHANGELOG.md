@@ -4,7 +4,7 @@
 
 - Add opt-in automatic supercompact with configurable 80% preparation and 90% force thresholds, process flags, and live-session controls under `/supercompact`.
 - Add `/supercompact auto-enable` and `/supercompact auto-disable` for automatic thresholds, plus `agent-driven-*` permission controls for agent-driven requests.
-- Run automatic workflows without a confirmation dialog, attempt each threshold once per crossing, retain the existing pre-native abort control, and document Pi native compaction's overflow-recovery fallback.
+- Run automatic workflows without a confirmation dialog, preserve momentum for clearly unfinished authorized work, attempt each threshold once per crossing, retain the existing pre-native abort control, and document Pi native compaction's overflow-recovery fallback.
 
 ## 0.3.1 - 2026-07-27
 

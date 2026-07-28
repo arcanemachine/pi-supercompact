@@ -2583,6 +2583,9 @@ describe("automatic supercompact", () => {
     expect(harness.messages(SUMMARY_REQUEST_TYPE)[0].content).toContain(
       "Automatic supercompact reached its force threshold",
     );
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)[0].content).toContain(
+      "Preserve momentum: choose continue when authorized work is clearly unfinished",
+    );
     expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
   });
 
@@ -2596,6 +2599,9 @@ describe("automatic supercompact", () => {
     expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(1);
     expect(harness.messages(PREPARATION_REQUEST_TYPE)[0].content).toContain(
       "Automatic supercompact authorization is already active",
+    );
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)[0].content).toContain(
+      "Preserve momentum: choose continue when authorized work is clearly unfinished",
     );
 
     const result = await harness
