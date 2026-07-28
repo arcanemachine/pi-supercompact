@@ -20,6 +20,7 @@ const SUMMARY_REQUEST_TYPE = "pi-supercompact:summary-request";
 const CONTEXT_MESSAGE_TYPE = "pi-supercompact:context";
 const CONTINUATION_OUTCOME_ENTRY_TYPE = "pi-supercompact:continuation-outcome";
 const SESSION_PERMISSION_ENTRY_TYPE = "pi-supercompact:session-permission";
+const SESSION_AUTOMATIC_ENTRY_TYPE = "pi-supercompact:session-automatic";
 const DECISION_TOOL_NAME = "record_supercompact_decision";
 const AGENT_TOOL_NAME = "supercompact";
 const PROJECT_CWD = "/workspace/test-project";
@@ -33,6 +34,10 @@ interface HarnessOptions {
   globalConfig?: string;
   projectConfig?: string;
   confirmed?: boolean;
+  flags?: Record<string, boolean>;
+  contextUsage?:
+    | { tokens: number | null; contextWindow: number; percent: number | null }
+    | undefined;
 }
 
 function missingFile(): Error & { code: string } {
@@ -54,7 +59,9 @@ function createHarness(options: HarnessOptions = {}) {
   });
 
   const handlers = new Map<string, Handler>();
-  let command: any;
+  const commands = new Map<string, any>();
+  const flags = new Map<string, boolean>(Object.entries(options.flags ?? {}));
+  let contextUsage = options.contextUsage;
   let entryRenderer: any;
   const tools = new Map<string, any>();
   const sessionEntries: any[] = [];
@@ -68,9 +75,11 @@ function createHarness(options: HarnessOptions = {}) {
     on: vi.fn((event: string, handler: Handler) =>
       handlers.set(event, handler),
     ),
-    registerCommand: vi.fn((_name: string, value: any) => {
-      command = value;
+    registerCommand: vi.fn((name: string, value: any) => {
+      commands.set(name, value);
     }),
+    registerFlag: vi.fn(),
+    getFlag: vi.fn((name: string) => flags.get(name)),
     registerTool: vi.fn((value: any) => {
       tools.set(value.name, value);
       if (!activeTools.includes(value.name)) activeTools.push(value.name);
@@ -120,6 +129,7 @@ function createHarness(options: HarnessOptions = {}) {
     },
     compact: vi.fn(),
     abort: vi.fn(),
+    getContextUsage: vi.fn(() => contextUsage),
   };
 
   extension(pi);
@@ -129,7 +139,19 @@ function createHarness(options: HarnessOptions = {}) {
     pi: pi as any,
     ctx,
     handlers,
-    command: () => command,
+    command: () => commands.get("supercompact"),
+    setContextUsage: (
+      usage:
+        | {
+            tokens: number | null;
+            contextWindow: number;
+            percent: number | null;
+          }
+        | undefined,
+    ) => {
+      contextUsage = usage;
+    },
+    triggerTurnEnd: () => handlers.get("turn_end")?.({}, ctx),
     decisionTool: () => {
       const tool = tools.get(DECISION_TOOL_NAME);
       if (!tool) throw new Error("decision tool not registered");
@@ -146,6 +168,7 @@ function createHarness(options: HarnessOptions = {}) {
     },
     registeredTools: () => [...tools.values()],
     entryRenderer: () => entryRenderer,
+    flags: () => flags,
     messages: (customType: string) =>
       sendMessage.mock.calls
         .map(([message]) => message)
@@ -355,10 +378,18 @@ function deferred<T>() {
 beforeEach(() => vi.clearAllMocks());
 
 describe("commands and menu", () => {
-  it("1. bare command opens the new menu", async () => {
+  it("1. bare command opens the consolidated menu", async () => {
     const harness = createHarness();
+    expect(harness.pi.registerCommand).toHaveBeenCalledWith(
+      "supercompact",
+      expect.anything(),
+    );
+    expect(harness.pi.registerCommand).not.toHaveBeenCalledWith(
+      "supercompact-auto",
+      expect.anything(),
+    );
     expect(harness.command().description).toBe(
-      "Prepare or force supercompaction; manage request permission or abort",
+      "Prepare, force, abort, or manage automatic and agent-driven controls",
     );
     harness.ctx.ui.select.mockResolvedValue(undefined);
 
@@ -367,10 +398,11 @@ describe("commands and menu", () => {
     expect(harness.ctx.ui.select).toHaveBeenCalledWith("Supercompact", [
       "Run pre-compaction wrap",
       "Force supercompaction now",
-      "Allow agent requests with confirmation for this session",
-      "Allow agent requests without confirmation for this session",
-      "Allow the next agent request without confirmation",
-      "Deny agent supercompaction requests for this session",
+      "Allow agent-driven requests with confirmation for this session",
+      "Allow agent-driven requests without confirmation for this session",
+      "Allow the next agent-driven request without confirmation",
+      "Deny agent-driven supercompaction requests for this session",
+      "Enable automatic supercompact for this session",
       "Abort active pre-native supercompaction",
       "Cancel",
     ]);
@@ -379,14 +411,14 @@ describe("commands and menu", () => {
   it("selecting no-confirm in the menu enables the distinct session mode", async () => {
     const harness = createHarness();
     harness.ctx.ui.select.mockResolvedValue(
-      "Allow agent requests without confirmation for this session",
+      "Allow agent-driven requests without confirmation for this session",
     );
 
     await harness.command().handler("", harness.ctx);
 
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm 🗜️ ",
     );
     await confirmPreparation(harness);
     expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
@@ -395,14 +427,14 @@ describe("commands and menu", () => {
   it("selecting one-shot no-confirm in the menu arms one request", async () => {
     const harness = createHarness();
     harness.ctx.ui.select.mockResolvedValue(
-      "Allow the next agent request without confirmation",
+      "Allow the next agent-driven request without confirmation",
     );
 
     await harness.command().handler("", harness.ctx);
 
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm-once 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm-once 🗜️ ",
     );
     const result = await confirmPreparation(harness);
     expect(result.details.authorization).toBe("one-shot-no-confirm");
@@ -460,10 +492,12 @@ describe("commands and menu", () => {
       [
         "run",
         "force",
-        "allow",
-        "allow-noconfirm",
-        "allow-noconfirm-once",
-        "deny",
+        "auto-enable",
+        "auto-disable",
+        "agent-driven-allow",
+        "agent-driven-allow-noconfirm",
+        "agent-driven-allow-noconfirm-once",
+        "agent-driven-deny",
         "abort",
       ].map((value) => ({
         value,
@@ -472,15 +506,21 @@ describe("commands and menu", () => {
     );
   });
 
-  it("7. removed, malformed, and legacy commands report the new usage", async () => {
+  it("7. removed, malformed, and legacy commands report the new usage without changing state", async () => {
     const harness = createHarness();
     for (const command of [
       "enable",
       "disable",
-      "allow extra",
-      "allow-noconfirm extra",
-      "allow-noconfirm-once extra",
-      "deny extra",
+      "allow",
+      "allow-noconfirm",
+      "allow-noconfirm-once",
+      "deny",
+      "auto-enable extra",
+      "auto-disable extra",
+      "agent-driven-allow extra",
+      "agent-driven-allow-noconfirm extra",
+      "agent-driven-allow-noconfirm-once extra",
+      "agent-driven-deny extra",
       "abort extra",
       "legacy bare context",
     ]) {
@@ -488,7 +528,7 @@ describe("commands and menu", () => {
     }
     expect(harness.pi.sendMessage).not.toHaveBeenCalled();
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
-      "Usage: /supercompact [run [extra context] | force [extra context] | allow | allow-noconfirm | allow-noconfirm-once | deny | abort]",
+      "Usage: /supercompact [run [extra context] | force [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]",
       "error",
     );
   });
@@ -514,7 +554,7 @@ describe("configuration and live-session permission", () => {
       AGENT_TOOL_NAME,
     ]);
     await expect(confirmPreparation(harness)).rejects.toThrow(
-      /\/supercompact (run|allow|allow-noconfirm|allow-noconfirm-once)/,
+      /\/supercompact (run|agent-driven-allow|agent-driven-allow-noconfirm|agent-driven-allow-noconfirm-once)/,
     );
   });
 
@@ -583,7 +623,7 @@ describe("configuration and live-session permission", () => {
       globalConfig: '{"agentRequestsAllowed":false}',
     });
     const reads = readFileSyncMock.mock.calls.length;
-    await harness.command().handler("allow", harness.ctx);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     expect(readFileSyncMock.mock.calls).toHaveLength(reads);
     await expect(confirmPreparation(harness)).resolves.toMatchObject({
       details: { status: "queued" },
@@ -595,7 +635,7 @@ describe("configuration and live-session permission", () => {
       globalConfig: '{"agentRequestsAllowed":true}',
     });
     const reads = readFileSyncMock.mock.calls.length;
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     expect(readFileSyncMock.mock.calls).toHaveLength(reads);
     await expect(confirmPreparation(harness)).rejects.toThrow(
       "explicitly denied",
@@ -606,7 +646,7 @@ describe("configuration and live-session permission", () => {
     const harness = createHarness({
       globalConfig: '{"agentRequestsAllowed":true}',
     });
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     await expect(confirmPreparation(harness)).rejects.toThrow(
       "explicitly denied",
     );
@@ -619,10 +659,10 @@ describe("configuration and live-session permission", () => {
   it("17. repeated allow and deny keep stable, unique schemas", async () => {
     const harness = createHarness();
     const initialTools = harness.activeTools();
-    await harness.command().handler("allow", harness.ctx);
-    await harness.command().handler("allow", harness.ctx);
-    await harness.command().handler("deny", harness.ctx);
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     expect(harness.activeTools()).toEqual(initialTools);
     expect(
       harness.activeTools().filter((name) => name === AGENT_TOOL_NAME),
@@ -643,23 +683,25 @@ describe("configuration and live-session permission", () => {
       undefined,
     );
 
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
       undefined,
     );
 
-    await harness.command().handler("allow-noconfirm", harness.ctx);
+    await harness
+      .command()
+      .handler("agent-driven-allow-noconfirm", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm 🗜️ ",
     );
 
-    await harness.command().handler("deny", harness.ctx);
-    await harness.command().handler("allow", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow 🗜️ ",
+      "supercompact: agent-driven-allow 🗜️ ",
     );
   });
 
@@ -765,7 +807,7 @@ describe("configuration and live-session permission", () => {
     const harness = createHarness({
       globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
     });
-    await harness.command().handler("allow", harness.ctx);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     harness.handlers.get("session_start")?.({ reason: "resume" }, harness.ctx);
     const result = await confirmPreparation(harness);
     expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
@@ -776,14 +818,14 @@ describe("configuration and live-session permission", () => {
     const require = createHarness({
       globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
     });
-    await require.command().handler("allow", require.ctx);
+    await require.command().handler("agent-driven-allow", require.ctx);
     await confirmPreparation(require);
     expect(require.ctx.ui.confirm).toHaveBeenCalledOnce();
 
     const waive = createHarness({
       globalConfig: '{"requireConfirmation":true,"agentRequestsAllowed":true}',
     });
-    await waive.command().handler("allow-noconfirm", waive.ctx);
+    await waive.command().handler("agent-driven-allow-noconfirm", waive.ctx);
     await confirmPreparation(waive);
     expect(waive.ctx.ui.confirm).not.toHaveBeenCalled();
 
@@ -791,7 +833,9 @@ describe("configuration and live-session permission", () => {
       globalConfig: '{"requireConfirmation":true}',
     });
     await beginPreparation(preparedWaive);
-    await preparedWaive.command().handler("allow-noconfirm", preparedWaive.ctx);
+    await preparedWaive
+      .command()
+      .handler("agent-driven-allow-noconfirm", preparedWaive.ctx);
     await confirmPreparation(preparedWaive);
     expect(preparedWaive.ctx.ui.confirm).not.toHaveBeenCalled();
 
@@ -799,7 +843,9 @@ describe("configuration and live-session permission", () => {
       globalConfig: '{"requireConfirmation":false}',
     });
     await beginPreparation(preparedRequire);
-    await preparedRequire.command().handler("allow", preparedRequire.ctx);
+    await preparedRequire
+      .command()
+      .handler("agent-driven-allow", preparedRequire.ctx);
     await confirmPreparation(preparedRequire);
     expect(preparedRequire.ctx.ui.confirm).toHaveBeenCalledOnce();
 
@@ -807,7 +853,9 @@ describe("configuration and live-session permission", () => {
       hasUI: false,
       globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
     });
-    await configuredDenied.command().handler("deny", configuredDenied.ctx);
+    await configuredDenied
+      .command()
+      .handler("agent-driven-deny", configuredDenied.ctx);
     await expect(confirmPreparation(configuredDenied)).rejects.toThrow(
       "explicitly denied",
     );
@@ -817,7 +865,7 @@ describe("configuration and live-session permission", () => {
       hasUI: false,
       globalConfig: '{"requireConfirmation":false}',
     });
-    await oneOff.command().handler("deny", oneOff.ctx);
+    await oneOff.command().handler("agent-driven-deny", oneOff.ctx);
     await beginPreparation(oneOff);
     await expect(confirmPreparation(oneOff)).resolves.toMatchObject({
       details: { authorization: "prepared-no-confirm" },
@@ -831,7 +879,9 @@ describe("session-only no-confirm permission", () => {
     const initialTools = harness.activeTools();
     const reads = readFileSyncMock.mock.calls.length;
 
-    await harness.command().handler("allow-noconfirm", harness.ctx);
+    await harness
+      .command()
+      .handler("agent-driven-allow-noconfirm", harness.ctx);
     const result = await confirmPreparation(harness);
 
     expect(readFileSyncMock.mock.calls).toHaveLength(reads);
@@ -852,7 +902,7 @@ describe("session-only no-confirm permission", () => {
     });
     expect(harness.ctx.ui.setStatus).toHaveBeenCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
       "Supercompaction is proceeding under live-session no-confirm permission. No additional approval is required.",
@@ -864,20 +914,22 @@ describe("session-only no-confirm permission", () => {
 
   it("works headlessly while retaining validation and workflow gates", async () => {
     const headless = createHarness({ hasUI: false });
-    await headless.command().handler("allow-noconfirm", headless.ctx);
+    await headless
+      .command()
+      .handler("agent-driven-allow-noconfirm", headless.ctx);
     await expect(confirmPreparation(headless)).resolves.toMatchObject({
       details: { authorization: "session-no-confirm" },
     });
     expect(headless.ctx.ui.confirm).not.toHaveBeenCalled();
 
     const empty = createHarness({ hasUI: false });
-    await empty.command().handler("allow-noconfirm", empty.ctx);
+    await empty.command().handler("agent-driven-allow-noconfirm", empty.ctx);
     await expect(
       confirmPreparation(empty, { nextAction: "   " }),
     ).rejects.toThrow("Supply one concrete next action");
 
     const busy = createHarness({ hasUI: false });
-    await busy.command().handler("allow-noconfirm", busy.ctx);
+    await busy.command().handler("agent-driven-allow-noconfirm", busy.ctx);
     await confirmPreparation(busy);
     await expect(confirmPreparation(busy)).rejects.toThrow(
       "already in progress",
@@ -887,7 +939,9 @@ describe("session-only no-confirm permission", () => {
       hasUI: false,
       allowDecisionTool: false,
     });
-    await unavailable.command().handler("allow-noconfirm", unavailable.ctx);
+    await unavailable
+      .command()
+      .handler("agent-driven-allow-noconfirm", unavailable.ctx);
     await expect(confirmPreparation(unavailable)).rejects.toThrow(
       "internal decision tool",
     );
@@ -895,24 +949,32 @@ describe("session-only no-confirm permission", () => {
 
   it("keeps normal allow confirmation-required and deny revokes both modes", async () => {
     const allowed = createHarness();
-    await allowed.command().handler("allow-noconfirm", allowed.ctx);
-    await allowed.command().handler("allow", allowed.ctx);
+    await allowed
+      .command()
+      .handler("agent-driven-allow-noconfirm", allowed.ctx);
+    await allowed.command().handler("agent-driven-allow", allowed.ctx);
     await confirmPreparation(allowed);
     expect(allowed.ctx.ui.confirm).toHaveBeenCalledOnce();
 
     const deniedNoConfirm = createHarness();
     await deniedNoConfirm
       .command()
-      .handler("allow-noconfirm", deniedNoConfirm.ctx);
-    await deniedNoConfirm.command().handler("deny", deniedNoConfirm.ctx);
+      .handler("agent-driven-allow-noconfirm", deniedNoConfirm.ctx);
+    await deniedNoConfirm
+      .command()
+      .handler("agent-driven-deny", deniedNoConfirm.ctx);
     await expect(confirmPreparation(deniedNoConfirm)).rejects.toThrow(
       "explicitly denied",
     );
     expect(deniedNoConfirm.ctx.ui.confirm).not.toHaveBeenCalled();
 
     const deniedAllowed = createHarness();
-    await deniedAllowed.command().handler("allow", deniedAllowed.ctx);
-    await deniedAllowed.command().handler("deny", deniedAllowed.ctx);
+    await deniedAllowed
+      .command()
+      .handler("agent-driven-allow", deniedAllowed.ctx);
+    await deniedAllowed
+      .command()
+      .handler("agent-driven-deny", deniedAllowed.ctx);
     await expect(confirmPreparation(deniedAllowed)).rejects.toThrow(
       "explicitly denied",
     );
@@ -922,7 +984,9 @@ describe("session-only no-confirm permission", () => {
     const noConfirm = createHarness({
       globalConfig: '{"agentRequestsAllowed":false}',
     });
-    await noConfirm.command().handler("allow-noconfirm", noConfirm.ctx);
+    await noConfirm
+      .command()
+      .handler("agent-driven-allow-noconfirm", noConfirm.ctx);
     expect(noConfirm.pi.appendEntry).toHaveBeenCalledWith(
       SESSION_PERMISSION_ENTRY_TYPE,
       { permission: "allowed-noconfirm" },
@@ -935,25 +999,25 @@ describe("session-only no-confirm permission", () => {
     expect(noConfirm.ctx.ui.confirm).not.toHaveBeenCalled();
     expect(noConfirm.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm 🗜️ ",
     );
 
     const allowed = createHarness({
       globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
     });
-    await allowed.command().handler("allow", allowed.ctx);
+    await allowed.command().handler("agent-driven-allow", allowed.ctx);
     allowed.handlers.get("session_start")?.({ reason: "reload" }, allowed.ctx);
     await confirmPreparation(allowed);
     expect(allowed.ctx.ui.confirm).toHaveBeenCalledOnce();
     expect(allowed.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow 🗜️ ",
+      "supercompact: agent-driven-allow 🗜️ ",
     );
 
     const denied = createHarness({
       globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
     });
-    await denied.command().handler("deny", denied.ctx);
+    await denied.command().handler("agent-driven-deny", denied.ctx);
     denied.handlers.get("session_start")?.({ reason: "reload" }, denied.ctx);
     await expect(confirmPreparation(denied)).rejects.toThrow(
       "explicitly denied",
@@ -966,7 +1030,9 @@ describe("session-only no-confirm permission", () => {
 
   it("lets prepared run skip its dialog only while no-confirm is active", async () => {
     const noConfirm = createHarness({ hasUI: false });
-    await noConfirm.command().handler("allow-noconfirm", noConfirm.ctx);
+    await noConfirm
+      .command()
+      .handler("agent-driven-allow-noconfirm", noConfirm.ctx);
     await beginPreparation(noConfirm, "preserve this context");
     await confirmPreparation(noConfirm);
     expect(noConfirm.ctx.ui.confirm).not.toHaveBeenCalled();
@@ -975,7 +1041,7 @@ describe("session-only no-confirm permission", () => {
     );
 
     const normal = createHarness();
-    await normal.command().handler("allow", normal.ctx);
+    await normal.command().handler("agent-driven-allow", normal.ctx);
     await beginPreparation(normal);
     await confirmPreparation(normal);
     expect(normal.ctx.ui.confirm).toHaveBeenCalledOnce();
@@ -984,11 +1050,13 @@ describe("session-only no-confirm permission", () => {
   it("keeps schemas stable through no-confirm settlement and denial", async () => {
     const harness = createHarness();
     const initialTools = harness.activeTools();
-    await harness.command().handler("allow-noconfirm", harness.ctx);
+    await harness
+      .command()
+      .handler("agent-driven-allow-noconfirm", harness.ctx);
     await confirmPreparation(harness);
     const summary = harness.messages(SUMMARY_REQUEST_TYPE)[0];
     harness.handlers.get("message_end")?.(customMessage(summary), harness.ctx);
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     await compactSuccessfully(harness);
     const restored = harness.messages(CONTEXT_MESSAGE_TYPE)[0];
     expect(restored.details.preparation.authorization).toBe(
@@ -1012,7 +1080,7 @@ describe("one-shot no-confirm permission", () => {
     const configuredDenied = createHarness();
     await configuredDenied
       .command()
-      .handler("allow-noconfirm-once", configuredDenied.ctx);
+      .handler("agent-driven-allow-noconfirm-once", configuredDenied.ctx);
     const configuredDeniedResult = await confirmPreparation(configuredDenied);
     expect(configuredDeniedResult.details.authorization).toBe(
       "one-shot-no-confirm",
@@ -1032,17 +1100,19 @@ describe("one-shot no-confirm permission", () => {
     });
     await configuredConfirm
       .command()
-      .handler("allow-noconfirm-once", configuredConfirm.ctx);
+      .handler("agent-driven-allow-noconfirm-once", configuredConfirm.ctx);
     await confirmPreparation(configuredConfirm);
     await finishQueuedSupercompact(configuredConfirm);
     await confirmPreparation(configuredConfirm);
     expect(configuredConfirm.ctx.ui.confirm).toHaveBeenCalledOnce();
 
     const explicitlyDenied = createHarness();
-    await explicitlyDenied.command().handler("deny", explicitlyDenied.ctx);
     await explicitlyDenied
       .command()
-      .handler("allow-noconfirm-once", explicitlyDenied.ctx);
+      .handler("agent-driven-deny", explicitlyDenied.ctx);
+    await explicitlyDenied
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", explicitlyDenied.ctx);
     await confirmPreparation(explicitlyDenied);
     await finishQueuedSupercompact(explicitlyDenied);
     await expect(confirmPreparation(explicitlyDenied)).rejects.toThrow(
@@ -1050,14 +1120,16 @@ describe("one-shot no-confirm permission", () => {
     );
 
     const explicitlyAllowed = createHarness();
-    await explicitlyAllowed.command().handler("allow", explicitlyAllowed.ctx);
     await explicitlyAllowed
       .command()
-      .handler("allow-noconfirm-once", explicitlyAllowed.ctx);
+      .handler("agent-driven-allow", explicitlyAllowed.ctx);
+    await explicitlyAllowed
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", explicitlyAllowed.ctx);
     await confirmPreparation(explicitlyAllowed);
     expect(explicitlyAllowed.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow 🗜️ ",
+      "supercompact: agent-driven-allow 🗜️ ",
     );
     await finishQueuedSupercompact(explicitlyAllowed);
     await confirmPreparation(explicitlyAllowed);
@@ -1068,7 +1140,9 @@ describe("one-shot no-confirm permission", () => {
     const configured = createHarness({
       globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
     });
-    await configured.command().handler("allow-noconfirm-once", configured.ctx);
+    await configured
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", configured.ctx);
     expect(configured.ctx.ui.notify).toHaveBeenLastCalledWith(
       expect.stringContaining("already allowed without confirmation"),
       "warning",
@@ -1082,17 +1156,19 @@ describe("one-shot no-confirm permission", () => {
     });
 
     const liveSession = createHarness();
-    await liveSession.command().handler("allow-noconfirm", liveSession.ctx);
     await liveSession
       .command()
-      .handler("allow-noconfirm-once", liveSession.ctx);
+      .handler("agent-driven-allow-noconfirm", liveSession.ctx);
+    await liveSession
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", liveSession.ctx);
     expect(liveSession.ctx.ui.notify).toHaveBeenLastCalledWith(
       expect.stringContaining("already allowed without confirmation"),
       "warning",
     );
     expect(liveSession.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm 🗜️ ",
     );
     await expect(confirmPreparation(liveSession)).resolves.toMatchObject({
       details: { authorization: "session-no-confirm" },
@@ -1101,25 +1177,29 @@ describe("one-shot no-confirm permission", () => {
     const overriddenConfig = createHarness({
       globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
     });
-    await overriddenConfig.command().handler("deny", overriddenConfig.ctx);
     await overriddenConfig
       .command()
-      .handler("allow-noconfirm-once", overriddenConfig.ctx);
+      .handler("agent-driven-deny", overriddenConfig.ctx);
+    await overriddenConfig
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", overriddenConfig.ctx);
     expect(overriddenConfig.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm-once 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm-once 🗜️ ",
     );
   });
 
   it("keeps the grant armed through validation, availability, and queue failures", async () => {
     const invalid = createHarness();
-    await invalid.command().handler("allow-noconfirm-once", invalid.ctx);
+    await invalid
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", invalid.ctx);
     await expect(
       confirmPreparation(invalid, { nextAction: "   " }),
     ).rejects.toThrow("Supply one concrete next action");
     expect(invalid.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm-once 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm-once 🗜️ ",
     );
     await expect(confirmPreparation(invalid)).resolves.toMatchObject({
       details: { authorization: "one-shot-no-confirm" },
@@ -1128,19 +1208,19 @@ describe("one-shot no-confirm permission", () => {
     const unavailable = createHarness({ allowDecisionTool: false });
     await unavailable
       .command()
-      .handler("allow-noconfirm-once", unavailable.ctx);
+      .handler("agent-driven-allow-noconfirm-once", unavailable.ctx);
     await expect(confirmPreparation(unavailable)).rejects.toThrow(
       "internal decision tool",
     );
     expect(unavailable.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm-once 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm-once 🗜️ ",
     );
 
     const queueFailure = createHarness();
     await queueFailure
       .command()
-      .handler("allow-noconfirm-once", queueFailure.ctx);
+      .handler("agent-driven-allow-noconfirm-once", queueFailure.ctx);
     queueFailure.pi.sendMessage.mockImplementationOnce(() => {
       throw new Error("one-shot queue failed");
     });
@@ -1149,7 +1229,7 @@ describe("one-shot no-confirm permission", () => {
     );
     expect(queueFailure.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm-once 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm-once 🗜️ ",
     );
     await expect(confirmPreparation(queueFailure)).resolves.toMatchObject({
       details: { authorization: "one-shot-no-confirm" },
@@ -1159,7 +1239,9 @@ describe("one-shot no-confirm permission", () => {
   it("does not arm while another workflow is active", async () => {
     const harness = createHarness();
     await harness.command().handler("force", harness.ctx);
-    await harness.command().handler("allow-noconfirm-once", harness.ctx);
+    await harness
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", harness.ctx);
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
       expect.stringContaining("already active"),
       "warning",
@@ -1167,47 +1249,59 @@ describe("one-shot no-confirm permission", () => {
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
   });
 
-  it("abort, deny, and superseding commands clear an unused grant", async () => {
+  it("abort, agent-driven denial, and superseding commands clear an unused grant", async () => {
     const aborted = createHarness();
-    await aborted.command().handler("allow-noconfirm-once", aborted.ctx);
+    await aborted
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", aborted.ctx);
     await aborted.command().handler("abort", aborted.ctx);
     expect(aborted.ctx.ui.notify).toHaveBeenLastCalledWith(
       "Pending one-shot no-confirm permission was canceled.",
       "info",
     );
     await expect(confirmPreparation(aborted)).rejects.toThrow(
-      /\/supercompact (run|allow|allow-noconfirm|allow-noconfirm-once)/,
+      /\/supercompact (run|agent-driven-allow|agent-driven-allow-noconfirm|agent-driven-allow-noconfirm-once)/,
     );
 
     const denied = createHarness();
-    await denied.command().handler("allow-noconfirm-once", denied.ctx);
-    await denied.command().handler("deny", denied.ctx);
+    await denied
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", denied.ctx);
+    await denied.command().handler("agent-driven-deny", denied.ctx);
     await expect(confirmPreparation(denied)).rejects.toThrow(
       "explicitly denied",
     );
 
     const run = createHarness();
-    await run.command().handler("allow-noconfirm-once", run.ctx);
+    await run.command().handler("agent-driven-allow-noconfirm-once", run.ctx);
     await beginPreparation(run);
     await confirmPreparation(run);
     expect(run.ctx.ui.confirm).toHaveBeenCalledOnce();
 
     const force = createHarness();
-    await force.command().handler("allow-noconfirm-once", force.ctx);
+    await force
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", force.ctx);
     await force.command().handler("force", force.ctx);
     expect(force.messages(SUMMARY_REQUEST_TYPE)[0].content).not.toContain(
       "one-shot no-confirm permission",
     );
 
     const allowed = createHarness();
-    await allowed.command().handler("allow-noconfirm-once", allowed.ctx);
-    await allowed.command().handler("allow", allowed.ctx);
+    await allowed
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", allowed.ctx);
+    await allowed.command().handler("agent-driven-allow", allowed.ctx);
     await confirmPreparation(allowed);
     expect(allowed.ctx.ui.confirm).toHaveBeenCalledOnce();
 
     const noConfirm = createHarness();
-    await noConfirm.command().handler("allow-noconfirm-once", noConfirm.ctx);
-    await noConfirm.command().handler("allow-noconfirm", noConfirm.ctx);
+    await noConfirm
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", noConfirm.ctx);
+    await noConfirm
+      .command()
+      .handler("agent-driven-allow-noconfirm", noConfirm.ctx);
     await expect(confirmPreparation(noConfirm)).resolves.toMatchObject({
       details: { authorization: "session-no-confirm" },
     });
@@ -1220,7 +1314,9 @@ describe("one-shot no-confirm permission", () => {
       { name: "session_shutdown", payload: {} },
     ]) {
       const harness = createHarness();
-      await harness.command().handler("allow-noconfirm-once", harness.ctx);
+      await harness
+        .command()
+        .handler("agent-driven-allow-noconfirm-once", harness.ctx);
       expect(harness.pi.appendEntry).not.toHaveBeenCalled();
       harness.handlers.get(event.name)?.(event.payload, harness.ctx);
       expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
@@ -1236,7 +1332,9 @@ describe("one-shot no-confirm permission", () => {
   it("works headlessly with stable schemas and preserves authorization metadata", async () => {
     const harness = createHarness({ hasUI: false });
     const initialTools = harness.activeTools();
-    await harness.command().handler("allow-noconfirm-once", harness.ctx);
+    await harness
+      .command()
+      .handler("agent-driven-allow-noconfirm-once", harness.ctx);
     const result = await confirmPreparation(harness, {
       extraContext: "retain the one-shot boundary",
     });
@@ -1328,7 +1426,7 @@ describe("preparation", () => {
     const harness = createHarness();
     const initialTools = harness.activeTools();
     await beginPreparation(harness);
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     expect(harness.activeTools()).toEqual(initialTools);
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
       "Pending pre-compaction preparation was canceled.",
@@ -1408,7 +1506,7 @@ describe("final confirmation", () => {
       extraContext: "summary detail",
     });
     expect(harness.ctx.ui.confirm).toHaveBeenCalledWith(
-      "Confirm agent-requested supercompaction",
+      "Confirm agent-driven supercompaction",
       [
         "Post-compaction behavior: stop and wait",
         "Next action: Wait for the user.",
@@ -1478,7 +1576,7 @@ describe("final confirmation", () => {
 
   it("31. decline under session allow retains policy and directs waiting", async () => {
     const harness = createHarness({ confirmed: false });
-    await harness.command().handler("allow", harness.ctx);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     await beginPreparation(harness);
     const result = await confirmPreparation(harness);
     expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
@@ -1575,7 +1673,7 @@ describe("force path", () => {
 
   it("38. force remains usable while agent requests are denied", async () => {
     const harness = createHarness();
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     await harness.command().handler("force", harness.ctx);
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
   });
@@ -1643,7 +1741,7 @@ describe("abort command", () => {
   it("cancels active preparation and preserves permission and schemas", async () => {
     const harness = createHarness({ idle: false });
     const initialTools = harness.activeTools();
-    await harness.command().handler("allow", harness.ctx);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     await beginPreparation(harness);
 
     await harness.command().handler("abort", harness.ctx);
@@ -1757,13 +1855,13 @@ describe("workflow and caching-sensitive state", () => {
 
   it("44. session allow remains active after workflow success and failure", async () => {
     const success = createHarness();
-    await success.command().handler("allow", success.ctx);
+    await success.command().handler("agent-driven-allow", success.ctx);
     await beginPreparedSummary(success);
     await compactSuccessfully(success);
     expect(success.activeTools()).toContain(AGENT_TOOL_NAME);
 
     const failure = createHarness();
-    await failure.command().handler("allow", failure.ctx);
+    await failure.command().handler("agent-driven-allow", failure.ctx);
     await beginPreparedSummary(failure);
     await recordSummaryDecision(failure, "stop");
     failure.handlers.get("agent_settled")?.({}, failure.ctx);
@@ -1775,7 +1873,7 @@ describe("workflow and caching-sensitive state", () => {
     const harness = createHarness();
     const initialTools = harness.activeTools();
     await beginPreparation(harness);
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     expect(harness.activeTools()).toEqual(initialTools);
     await expect(confirmPreparation(harness)).rejects.toThrow(
       "explicitly denied",
@@ -1786,7 +1884,7 @@ describe("workflow and caching-sensitive state", () => {
     const harness = createHarness();
     const initialTools = harness.activeTools();
     await beginPreparedSummary(harness);
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     expect(harness.activeTools()).toEqual(initialTools);
     await recordSummaryDecision(harness, "stop");
     harness.handlers.get("agent_settled")?.({}, harness.ctx);
@@ -1796,7 +1894,7 @@ describe("workflow and caching-sensitive state", () => {
   it("47. internal decision cleanup leaves both schemas active", async () => {
     const harness = createHarness();
     const initialTools = harness.activeTools();
-    await harness.command().handler("allow", harness.ctx);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     await confirmPreparation(harness);
     const summary = harness.messages(SUMMARY_REQUEST_TYPE)[0];
     harness.handlers.get("message_end")?.(customMessage(summary), harness.ctx);
@@ -1949,25 +2047,27 @@ describe("preserved workflow regressions", () => {
 
   it("reports host exclusion while all permission commands still update state", async () => {
     const harness = createHarness({ allowAgentTool: false });
-    await harness.command().handler("allow", harness.ctx);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow 🗜️ ",
+      "supercompact: agent-driven-allow 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
       expect.stringContaining("Execution remains unavailable"),
       "warning",
     );
-    await harness.command().handler("allow-noconfirm", harness.ctx);
+    await harness
+      .command()
+      .handler("agent-driven-allow-noconfirm", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: allow-noconfirm 🗜️ ",
+      "supercompact: agent-driven-allow-noconfirm 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
       expect.stringContaining("Execution remains unavailable"),
       "warning",
     );
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
       undefined,
@@ -2193,7 +2293,7 @@ describe("preserved workflow regressions", () => {
     const confirmation = deferred<boolean>();
     harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
     const pending = confirmPreparation(harness);
-    await harness.command().handler("deny", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
     confirmation.resolve(true);
     const result = await pending;
     expect(result.details.status).toBe("revoked");
@@ -2389,8 +2489,8 @@ describe("stable-schema runtime gates", () => {
     ]);
 
     await beginPreparation(harness);
-    await harness.command().handler("deny", harness.ctx);
-    await harness.command().handler("allow", harness.ctx);
+    await harness.command().handler("agent-driven-deny", harness.ctx);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
     harness.handlers.get("session_shutdown")?.({}, harness.ctx);
 
@@ -2440,5 +2540,225 @@ describe("stable-schema runtime gates", () => {
     await expect(pending).rejects.toThrow("internal decision tool");
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
     expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
+  });
+});
+
+describe("automatic supercompact", () => {
+  const automaticConfig = JSON.stringify({
+    supercompact: {
+      enabled: true,
+      thresholdPercent: 80,
+      forceThresholdPercent: 90,
+    },
+  });
+
+  it("registers both process flags and defaults enabled policy thresholds", () => {
+    const harness = createHarness({
+      globalConfig: '{"supercompact":{"enabled":true}}',
+    });
+    expect(harness.pi.registerFlag).toHaveBeenCalledWith("supercompact-auto", {
+      type: "boolean",
+      description: expect.stringContaining("Enable automatic"),
+    });
+    expect(harness.pi.registerFlag).toHaveBeenCalledWith(
+      "no-supercompact-auto",
+      {
+        type: "boolean",
+        description: expect.stringContaining("Disable automatic"),
+      },
+    );
+    harness.setContextUsage({ tokens: 80, contextWindow: 100, percent: 80 });
+    harness.triggerTurnEnd();
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(1);
+  });
+
+  it("uses force directly at the force threshold and never opens a dialog", () => {
+    const harness = createHarness({
+      globalConfig: automaticConfig,
+      contextUsage: { tokens: 90, contextWindow: 100, percent: 90 },
+    });
+    harness.triggerTurnEnd();
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(0);
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)[0].content).toContain(
+      "Automatic supercompact reached its force threshold",
+    );
+    expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
+  });
+
+  it("prepares once at the soft threshold and bypasses confirmation", async () => {
+    const harness = createHarness({
+      globalConfig: automaticConfig,
+      contextUsage: { tokens: 80, contextWindow: 100, percent: 80 },
+    });
+    harness.triggerTurnEnd();
+    harness.triggerTurnEnd();
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(1);
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)[0].content).toContain(
+      "Automatic supercompact authorization is already active",
+    );
+
+    const result = await harness
+      .agentTool()
+      .execute(
+        "automatic-request",
+        publicParams(),
+        undefined,
+        undefined,
+        harness.ctx,
+      );
+    expect(result.details.authorization).toBe("automatic-no-confirm");
+    expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
+  });
+
+  it("escalates only automatic preparation and does not duplicate force", () => {
+    const harness = createHarness({
+      globalConfig: automaticConfig,
+      contextUsage: { tokens: 80, contextWindow: 100, percent: 80 },
+    });
+    harness.triggerTurnEnd();
+    harness.setContextUsage({ tokens: 90, contextWindow: 100, percent: 90 });
+    harness.triggerTurnEnd();
+    harness.triggerTurnEnd();
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(1);
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
+  });
+
+  it("rearms only below the soft threshold or after compaction", () => {
+    const harness = createHarness({
+      globalConfig: automaticConfig,
+      contextUsage: { tokens: 80, contextWindow: 100, percent: 80 },
+    });
+    harness.triggerTurnEnd();
+    harness.handlers.get("session_compact")?.({}, harness.ctx);
+    harness.triggerTurnEnd();
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(2);
+
+    const below = createHarness({
+      globalConfig: automaticConfig,
+      contextUsage: { tokens: 80, contextWindow: 100, percent: 80 },
+    });
+    below.triggerTurnEnd();
+    below.command().handler("abort", below.ctx);
+    below.setContextUsage({ tokens: 79, contextWindow: 100, percent: 79 });
+    below.triggerTurnEnd();
+    below.setContextUsage({ tokens: 80, contextWindow: 100, percent: 80 });
+    below.triggerTurnEnd();
+    expect(below.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(2);
+  });
+
+  it("honors flag and session-command precedence and ignores unknown usage", async () => {
+    const disabledByFlag = createHarness({
+      globalConfig: automaticConfig,
+      flags: { "no-supercompact-auto": true },
+      contextUsage: { tokens: 90, contextWindow: 100, percent: 90 },
+    });
+    disabledByFlag.triggerTurnEnd();
+    expect(disabledByFlag.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
+
+    const disabledBySession = createHarness({
+      globalConfig: automaticConfig,
+      contextUsage: { tokens: 90, contextWindow: 100, percent: 90 },
+    });
+    await disabledBySession
+      .command()
+      .handler("auto-disable", disabledBySession.ctx);
+    disabledBySession.triggerTurnEnd();
+    expect(disabledBySession.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
+    expect(disabledBySession.pi.appendEntry).toHaveBeenCalledWith(
+      SESSION_AUTOMATIC_ENTRY_TYPE,
+      { enabled: false },
+    );
+
+    const enabledBySession = createHarness({
+      flags: { "no-supercompact-auto": true },
+      contextUsage: undefined,
+    });
+    await enabledBySession
+      .command()
+      .handler("auto-enable", enabledBySession.ctx);
+    enabledBySession.setContextUsage({
+      tokens: null,
+      contextWindow: 100,
+      percent: null,
+    });
+    enabledBySession.triggerTurnEnd();
+    expect(enabledBySession.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(0);
+    enabledBySession.setContextUsage({
+      tokens: 80,
+      contextWindow: 100,
+      percent: 80,
+    });
+    enabledBySession.triggerTurnEnd();
+    expect(enabledBySession.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(1);
+    expect(enabledBySession.pi.appendEntry).toHaveBeenCalledWith(
+      SESSION_AUTOMATIC_ENTRY_TYPE,
+      { enabled: true },
+    );
+  });
+
+  it("preserves live automatic overrides across reload and clears them otherwise", async () => {
+    const harness = createHarness();
+    await harness.command().handler("auto-enable", harness.ctx);
+    harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
+    harness.setContextUsage({ tokens: 80, contextWindow: 100, percent: 80 });
+    harness.triggerTurnEnd();
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(1);
+
+    harness.handlers.get("session_start")?.({ reason: "resume" }, harness.ctx);
+    harness.handlers.get("session_compact")?.({}, harness.ctx);
+    harness.triggerTurnEnd();
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(1);
+  });
+
+  it("does not supersede explicit preparation at the force threshold", async () => {
+    const harness = createHarness({
+      globalConfig: automaticConfig,
+      contextUsage: { tokens: 90, contextWindow: 100, percent: 90 },
+    });
+    await beginPreparation(harness);
+    harness.triggerTurnEnd();
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(1);
+  });
+
+  it("keeps automatic work independent from agent-request denial", async () => {
+    const harness = createHarness({
+      globalConfig: automaticConfig,
+      contextUsage: { tokens: 80, contextWindow: 100, percent: 80 },
+    });
+    harness.triggerTurnEnd();
+    await harness.command().handler("agent-driven-deny", harness.ctx);
+    const result = await harness
+      .agentTool()
+      .execute(
+        "automatic-request",
+        publicParams(),
+        undefined,
+        undefined,
+        harness.ctx,
+      );
+    expect(result.details.authorization).toBe("automatic-no-confirm");
+  });
+
+  it("fails closed for invalid automatic configuration", () => {
+    for (const supercompact of [
+      true,
+      { enabled: "yes" },
+      { enabled: true, thresholdPercent: 90, forceThresholdPercent: 80 },
+      { enabled: true, thresholdPercent: 0 },
+      { enabled: true, forceThresholdPercent: Number.POSITIVE_INFINITY },
+    ]) {
+      const harness = createHarness({
+        globalConfig: JSON.stringify({ supercompact }),
+        contextUsage: { tokens: 90, contextWindow: 100, percent: 90 },
+      });
+      harness.triggerTurnEnd();
+      expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
+      expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+        expect.stringContaining("Ignoring invalid supercompact config"),
+        "warning",
+      );
+    }
   });
 });
