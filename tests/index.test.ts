@@ -1390,6 +1390,19 @@ describe("preparation", () => {
     });
   });
 
+  it("automatic preparation identifies its threshold trigger", () => {
+    const prompt = buildPreparationPrompt("", true);
+    expect(prompt).toContain(
+      "Automatic supercompact was triggered because context usage crossed a configured threshold",
+    );
+    expect(prompt).toContain(
+      "the user did not manually request this checkpoint",
+    );
+    expect(prompt).not.toContain(
+      "The user supplied no extra preparation context.",
+    );
+  });
+
   it("20. run extra context appears once in the preparation prompt", async () => {
     const prompt = buildPreparationPrompt("unique-context-marker");
     expect(prompt.match(/unique-context-marker/g)).toHaveLength(1);

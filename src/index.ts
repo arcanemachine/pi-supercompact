@@ -417,7 +417,9 @@ export function buildPreparationPrompt(
       : "The user supplied no extra preparation context.";
 
   return [
-    "Perform a focused pre-compaction checkpoint for the active work. Do not compact immediately.",
+    automatic
+      ? "Automatic supercompact was triggered because context usage crossed a configured threshold; the user did not manually request this checkpoint. Perform a focused pre-compaction checkpoint for the active work. Do not describe it as user-requested, and do not compact immediately."
+      : "Perform a focused pre-compaction checkpoint for the active work. Do not compact immediately.",
     "Use the current conversation, relevant durable sources, and actual current state rather than relying on memory.",
     "Do not broaden the task, invent work, or turn this checkpoint into a broad audit or ceremonial report.",
     "",

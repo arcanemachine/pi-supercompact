@@ -60,7 +60,7 @@ Automatic supercompact is off by default. When enabled, it checks context usage 
 - At 90%, it skips unfinished automatic preparation and starts the same immediate summary as `/supercompact force`.
 - If usage first reaches 90%, it takes the force path directly.
 - Automatic work does not open a confirmation dialog. `/supercompact abort` can cancel it before Pi starts native compaction.
-- Automatic prompts preserve momentum: they prefer `continue` for clearly unfinished authorized work, retain the active objective and one exact next action, and stop only when work is complete, blocked, awaiting input or approval, or unsafe to continue.
+- Automatic prompts identify the threshold trigger rather than treating it as a user request. They preserve momentum: they prefer `continue` for clearly unfinished authorized work, retain the active objective and one exact next action, and stop only when work is complete, blocked, awaiting input or approval, or unsafe to continue.
 - Each threshold is tried once until usage falls below the soft threshold or compaction completes. An abort or failure does not retry immediately.
 
 Use `/supercompact auto-enable` or `/supercompact auto-disable` to override the setting for the live session. The choice survives `/reload`, but not a new, resumed, or forked session. It does not write configuration, and disabling it does not cancel automatic work already underway.
