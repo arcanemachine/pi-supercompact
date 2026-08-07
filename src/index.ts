@@ -420,6 +420,11 @@ export function buildPreparationPrompt(
     automatic
       ? "Automatic supercompact was triggered because context usage crossed a configured threshold; the user did not manually request this checkpoint. Perform a focused pre-compaction checkpoint for the active work. Do not describe it as user-requested, and do not compact immediately."
       : "Perform a focused pre-compaction checkpoint for the active work. Do not compact immediately.",
+    ...(automatic
+      ? [
+          `This is a preparation checkpoint, not the canonical summary turn. Do not write a handoff, claim compaction is complete, or stop after describing the next action. When no user input is needed, finish by calling ${AGENT_TOOL_NAME} with the continuation decision and exact next action; prose alone does not complete preparation. If user input is required, ask the question and wait.`,
+        ]
+      : []),
     "Use the current conversation, relevant durable sources, and actual current state rather than relying on memory.",
     "Do not broaden the task, invent work, or turn this checkpoint into a broad audit or ceremonial report.",
     "",
