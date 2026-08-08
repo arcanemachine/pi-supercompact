@@ -78,7 +78,6 @@ interface PreparationGrant {
   id: string;
   extraContext: string;
   origin: PreparationOrigin;
-  requiresConfirmation: boolean;
   consumed: boolean;
   revoked: boolean;
 }
@@ -123,7 +122,6 @@ interface AutomaticPolicy {
 
 interface ConfiguredPolicy {
   permission: ConfiguredPermission;
-  requireConfirmation: boolean;
   automatic: AutomaticPolicy;
 }
 
@@ -132,7 +130,6 @@ type ConfigReadResult =
   | {
       kind: "valid";
       allowed: boolean;
-      requireConfirmation: boolean;
       agentRequestsRequireConfirmation: boolean;
       automatic: AutomaticPolicy;
     }
@@ -283,7 +280,6 @@ function readAgentRequestConfig(path: string): ConfigReadResult {
         typeof parsed.agentRequestsAllowed === "boolean"
           ? parsed.agentRequestsAllowed
           : false,
-      requireConfirmation,
       agentRequestsRequireConfirmation:
         typeof parsed.agentRequestsRequireConfirmation === "boolean"
           ? parsed.agentRequestsRequireConfirmation
@@ -449,7 +445,7 @@ export function buildPreparationPrompt(
       : []),
     "- Re-read changed material when applicable and make a final accuracy pass.",
     "",
-    `When the boundary is clean and unambiguous, call ${AGENT_TOOL_NAME} with the expected continuation, exact next action, and any additional summary emphasis. ${automatic ? "Automatic supercompact authorization is already active; no confirmation dialog will open." : "Final user confirmation is normally required before native compaction begins; configured or explicit live-session no-confirm permission may waive only that dialog."}`,
+    `When the boundary is clean and unambiguous, call ${AGENT_TOOL_NAME} with the expected continuation, exact next action, and any additional summary emphasis. ${automatic ? "Automatic supercompact authorization is already active; no confirmation dialog will open." : "An explicit /supercompact run is itself the authorization, so no confirmation dialog will open before native compaction begins. Agent-driven requests that were not initiated through an explicit /supercompact run or /supercompact force remain subject to the final dialog unless no-confirm permission is active."}`,
     `Do not call ${AGENT_TOOL_NAME} merely because it is available; call it only after these checks are complete.`,
   ].join("\n");
 }
@@ -701,7 +697,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
 
   let request: SupercompactRequest | undefined;
   let configuredPermission: ConfiguredPermission = "denied";
-  let configuredRequireConfirmation = true;
   let configuredAutomatic: AutomaticPolicy = {
     enabled: false,
     thresholdPercent: DEFAULT_THRESHOLD_PERCENT,
@@ -854,7 +849,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
 
     let policy: ConfiguredPolicy = {
       permission: "denied",
-      requireConfirmation: true,
       automatic: {
         enabled: false,
         thresholdPercent: DEFAULT_THRESHOLD_PERCENT,
@@ -869,13 +863,11 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
               ? "allowed"
               : "allowed-noconfirm"
             : "denied",
-          requireConfirmation: config.result.requireConfirmation,
           automatic: config.result.automatic,
         };
       } else if (config.result.kind === "invalid") {
         policy = {
           permission: "denied",
-          requireConfirmation: true,
           automatic: {
             enabled: false,
             thresholdPercent: DEFAULT_THRESHOLD_PERCENT,
@@ -895,7 +887,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   const applyConfiguredPolicy = (ctx: ExtensionContext): void => {
     const policy = loadConfiguredPolicy(ctx);
     configuredPermission = policy.permission;
-    configuredRequireConfirmation = policy.requireConfirmation;
     configuredAutomatic = policy.automatic;
   };
 
@@ -1161,31 +1152,24 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         ? preparationGrant
         : undefined;
 
-    if (grant?.origin === "automatic") {
+    if (grant) {
       return {
         permission: "allowed-noconfirm",
         grantId: grant.id,
-        noConfirmAuthorization: "automatic-no-confirm",
+        noConfirmAuthorization:
+          grant.origin === "automatic"
+            ? "automatic-no-confirm"
+            : "prepared-no-confirm",
       };
     }
     if (sessionPermissionOverride === "allowed") {
-      return { permission: "allowed", grantId: grant?.id };
+      return { permission: "allowed" };
     }
     if (sessionPermissionOverride === "allowed-noconfirm") {
       return {
         permission: "allowed-noconfirm",
-        grantId: grant?.id,
         noConfirmAuthorization: "session-no-confirm",
       };
-    }
-    if (grant) {
-      return grant.requiresConfirmation
-        ? { permission: "allowed", grantId: grant.id }
-        : {
-            permission: "allowed-noconfirm",
-            grantId: grant.id,
-            noConfirmAuthorization: "prepared-no-confirm",
-          };
     }
     const permission = effectivePermission();
     if (permission === "allowed-noconfirm") {
@@ -1201,7 +1185,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     name: AGENT_TOOL_NAME,
     label: "Supercompact",
     description:
-      "Always-visible interface for requesting supercompaction; availability does not imply authorization and never grants its own authority. Complete the focused preparation checks first: refresh relevant durable context, close authorized work when safe, surface blockers or missing input, verify or persist work when applicable, choose continue or stop, and identify one exact next action. Final user confirmation is normally required; configured, explicit live-session, or one-shot no-confirm permission may waive only that dialog. Call after a hidden /supercompact run preparation request, or when the conversation makes supercompaction appropriate and agent-driven permission may exist. The execution result explains whether authorization is absent, confirmation is required, or no-confirm permission queued the workflow. Do not repeatedly retry a denied, declined, revoked, busy, unavailable, or confirmation-required headless request.",
+      "Always-visible interface for requesting supercompaction; availability does not imply authorization and never grants its own authority. Complete the focused preparation checks first: refresh relevant durable context, close authorized work when safe, surface blockers or missing input, verify or persist work when applicable, choose continue or stop, and identify one exact next action. An explicit /supercompact run is itself the authorization and, like /supercompact force, opens no confirmation dialog; the final dialog applies only to agent-driven requests that lack no-confirm permission. Call after a hidden /supercompact run preparation request, or when the conversation makes supercompaction appropriate and agent-driven permission may exist. The execution result explains whether authorization is absent, confirmation is required, or no-confirm permission queued the workflow. Do not repeatedly retry a denied, declined, revoked, busy, unavailable, or confirmation-required headless request.",
     parameters: AgentToolParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -1845,21 +1829,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     automatic = false,
   ): void => {
     if (!automatic) supersedeOneShotNoConfirmGrant(ctx);
-    const requiresConfirmation = automatic
-      ? false
-      : sessionPermissionOverride === "allowed"
-        ? true
-        : sessionPermissionOverride === "allowed-noconfirm"
-          ? false
-          : configuredRequireConfirmation;
-    if (!ctx.hasUI && requiresConfirmation) {
-      notify(
-        ctx,
-        "Pre-compaction preparation requires TUI or RPC mode for final confirmation in the current mode. Use /supercompact force for immediate execution, /supercompact agent-driven-allow-noconfirm for a live-session override, or configure requireConfirmation as false.",
-        "error",
-      );
-      return;
-    }
     if (request || confirmationId || preparationGrant) {
       notify(
         ctx,
@@ -1884,7 +1853,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       id,
       extraContext: extraContext.trim(),
       origin: automatic ? "automatic" : "explicit",
-      requiresConfirmation,
       consumed: false,
       revoked: false,
     };

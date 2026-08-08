@@ -533,11 +533,13 @@ describe("commands and menu", () => {
     );
   });
 
-  it("8. menu and run fail safely without UI while force remains available", async () => {
+  it("8. run and force work headlessly while the menu requires UI", async () => {
     const harness = createHarness({ hasUI: false });
     await harness.command().handler("", harness.ctx);
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(0);
+
     await harness.command().handler("run", harness.ctx);
-    expect(harness.pi.sendMessage).not.toHaveBeenCalled();
+    expect(harness.messages(PREPARATION_REQUEST_TYPE)).toHaveLength(1);
 
     await harness.command().handler("force headless", harness.ctx);
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
@@ -739,24 +741,25 @@ describe("configuration and live-session permission", () => {
     }
   });
 
-  it("uses the global confirmation setting for prepared runs", async () => {
-    const noConfirm = createHarness({
+  it("prepared run bypasses confirmation regardless of configuration", async () => {
+    const headless = createHarness({
       hasUI: false,
       globalConfig:
         '{"requireConfirmation":false,"agentRequestsAllowed":true,"agentRequestsRequireConfirmation":true}',
     });
-    await beginPreparation(noConfirm);
-    const noConfirmResult = await confirmPreparation(noConfirm);
-    expect(noConfirm.ctx.ui.confirm).not.toHaveBeenCalled();
-    expect(noConfirmResult.details.authorization).toBe("prepared-no-confirm");
+    await beginPreparation(headless);
+    const headlessResult = await confirmPreparation(headless);
+    expect(headless.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(headlessResult.details.authorization).toBe("prepared-no-confirm");
 
-    const confirm = createHarness({
+    const confirmRequired = createHarness({
       globalConfig:
         '{"requireConfirmation":true,"agentRequestsAllowed":true,"agentRequestsRequireConfirmation":false}',
     });
-    await beginPreparation(confirm);
-    await confirmPreparation(confirm);
-    expect(confirm.ctx.ui.confirm).toHaveBeenCalledOnce();
+    await beginPreparation(confirmRequired);
+    const result = await confirmPreparation(confirmRequired);
+    expect(confirmRequired.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(result.details.authorization).toBe("prepared-no-confirm");
   });
 
   it("lets confirmation-only config govern run without granting requests", async () => {
@@ -778,8 +781,9 @@ describe("configuration and live-session permission", () => {
     });
     await expect(confirmPreparation(harness)).rejects.toThrow("not authorized");
     await beginPreparation(harness);
-    await confirmPreparation(harness);
-    expect(harness.ctx.ui.confirm).toHaveBeenCalledOnce();
+    const result = await confirmPreparation(harness);
+    expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(result.details.authorization).toBe("prepared-no-confirm");
   });
 
   it("fails closed for invalid confirmation settings", async () => {
@@ -814,7 +818,7 @@ describe("configuration and live-session permission", () => {
     expect(result.details.authorization).toBe("configured-no-confirm");
   });
 
-  it("lets explicit session modes override configured confirmation", async () => {
+  it("session modes override configured confirmation for agent calls while a prepared run stays its own authorization", async () => {
     const require = createHarness({
       globalConfig: '{"requireConfirmation":false,"agentRequestsAllowed":true}',
     });
@@ -840,14 +844,17 @@ describe("configuration and live-session permission", () => {
     expect(preparedWaive.ctx.ui.confirm).not.toHaveBeenCalled();
 
     const preparedRequire = createHarness({
-      globalConfig: '{"requireConfirmation":false}',
+      globalConfig: '{"requireConfirmation":true}',
     });
     await beginPreparation(preparedRequire);
     await preparedRequire
       .command()
       .handler("agent-driven-allow", preparedRequire.ctx);
-    await confirmPreparation(preparedRequire);
-    expect(preparedRequire.ctx.ui.confirm).toHaveBeenCalledOnce();
+    const preparedRequireResult = await confirmPreparation(preparedRequire);
+    expect(preparedRequire.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(preparedRequireResult.details.authorization).toBe(
+      "prepared-no-confirm",
+    );
 
     const configuredDenied = createHarness({
       hasUI: false,
@@ -1028,23 +1035,26 @@ describe("session-only no-confirm permission", () => {
     );
   });
 
-  it("lets prepared run skip its dialog only while no-confirm is active", async () => {
-    const noConfirm = createHarness({ hasUI: false });
-    await noConfirm
+  it("prepared run never opens a confirmation dialog", async () => {
+    const headless = createHarness({ hasUI: false });
+    await headless
       .command()
-      .handler("agent-driven-allow-noconfirm", noConfirm.ctx);
-    await beginPreparation(noConfirm, "preserve this context");
-    await confirmPreparation(noConfirm);
-    expect(noConfirm.ctx.ui.confirm).not.toHaveBeenCalled();
-    expect(noConfirm.messages(SUMMARY_REQUEST_TYPE)[0].content).toContain(
+      .handler("agent-driven-allow-noconfirm", headless.ctx);
+    await beginPreparation(headless, "preserve this context");
+    await confirmPreparation(headless);
+    expect(headless.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(headless.messages(SUMMARY_REQUEST_TYPE)[0].content).toContain(
       "preserve this context",
     );
 
-    const normal = createHarness();
-    await normal.command().handler("agent-driven-allow", normal.ctx);
-    await beginPreparation(normal);
-    await confirmPreparation(normal);
-    expect(normal.ctx.ui.confirm).toHaveBeenCalledOnce();
+    const sessionAllow = createHarness();
+    await sessionAllow
+      .command()
+      .handler("agent-driven-allow", sessionAllow.ctx);
+    await beginPreparation(sessionAllow);
+    const result = await confirmPreparation(sessionAllow);
+    expect(sessionAllow.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(result.details.authorization).toBe("prepared-no-confirm");
   });
 
   it("keeps schemas stable through no-confirm settlement and denial", async () => {
@@ -1275,8 +1285,9 @@ describe("one-shot no-confirm permission", () => {
     const run = createHarness();
     await run.command().handler("agent-driven-allow-noconfirm-once", run.ctx);
     await beginPreparation(run);
-    await confirmPreparation(run);
-    expect(run.ctx.ui.confirm).toHaveBeenCalledOnce();
+    const runResult = await confirmPreparation(run);
+    expect(run.ctx.ui.confirm).not.toHaveBeenCalled();
+    expect(runResult.details.authorization).toBe("prepared-no-confirm");
 
     const force = createHarness();
     await force
@@ -1452,7 +1463,7 @@ describe("preparation", () => {
 
   it("24. session lifecycle clears preparation and confirmation state", async () => {
     const harness = createHarness();
-    await beginPreparation(harness);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     harness.ctx.ui.confirm.mockImplementationOnce(
       (_title: string, _message: string, options: { signal: AbortSignal }) =>
         new Promise<boolean>((_resolve, reject) =>
@@ -1467,10 +1478,6 @@ describe("preparation", () => {
     harness.handlers.get("session_start")?.({ reason: "reload" }, harness.ctx);
     expect((await pending).details.status).toBe("revoked");
     expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
-    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
-      "Pending pre-compaction preparation was canceled.",
-      "info",
-    );
 
     const shutdown = createHarness();
     await beginPreparation(shutdown);
@@ -1510,9 +1517,9 @@ describe("final confirmation", () => {
     await expect(confirmPreparation(harness)).rejects.toThrow("not authorized");
   });
 
-  it("27. confirmation shows continuation, next action, and contexts", async () => {
+  it("27. confirmation shows continuation, next action, and agent context", async () => {
     const harness = createHarness();
-    await beginPreparation(harness, "run detail");
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     await confirmPreparation(harness, {
       continuation: "stop",
       nextAction: "Wait for the user.",
@@ -1523,7 +1530,6 @@ describe("final confirmation", () => {
       [
         "Post-compaction behavior: stop and wait",
         "Next action: Wait for the user.",
-        "Preparation context: run detail",
         "Additional summary context: summary detail",
         "Confirming will begin the canonical super-summary and native compaction immediately.",
       ].join("\n\n"),
@@ -1531,15 +1537,13 @@ describe("final confirmation", () => {
     );
   });
 
-  it("27a. confirmation keeps user preparation context complete while truncating agent values", async () => {
-    const runContext =
-      "one   two three\nfour five six seven eight nine ten eleven twelve";
+  it("27a. confirmation truncates agent values while keeping them complete in the summary", async () => {
     const nextAction =
       "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
     const extraContext =
       "red orange yellow green blue indigo violet black white gray silver gold";
     const harness = createHarness();
-    await beginPreparation(harness, runContext);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     await confirmPreparation(harness, { nextAction, extraContext });
 
     const dialog = harness.ctx.ui.confirm.mock.calls[0][1];
@@ -1547,23 +1551,19 @@ describe("final confirmation", () => {
       "Next action: alpha beta gamma delta epsilon zeta eta theta iota kappa…",
     );
     expect(dialog).toContain(
-      "Preparation context: one two three four five six seven eight nine ten eleven twelve",
-    );
-    expect(dialog).toContain(
       "Additional summary context: red orange yellow green blue indigo violet black white gray…",
     );
-    expect(dialog.split("\n\n")).toHaveLength(5);
+    expect(dialog.split("\n\n")).toHaveLength(4);
     expect(dialog).not.toContain("\n\n\n");
 
     const summaryPrompt = harness.messages(SUMMARY_REQUEST_TYPE)[0].content;
     expect(summaryPrompt).toContain(nextAction);
-    expect(summaryPrompt).toContain(runContext);
     expect(summaryPrompt).toContain(extraContext);
   });
 
   it("28. confirmation acceptance starts exactly one summary", async () => {
     const harness = createHarness();
-    await beginPreparation(harness);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     await confirmPreparation(harness);
     expect(harness.ctx.ui.confirm).toHaveBeenCalledOnce();
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
@@ -1571,26 +1571,27 @@ describe("final confirmation", () => {
 
   it("29. confirmation decline starts no summary or compaction", async () => {
     const harness = createHarness({ confirmed: false });
-    await beginPreparation(harness);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     const result = await confirmPreparation(harness);
     expect(result.details.status).toBe("declined");
     expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
     expect(harness.ctx.compact).not.toHaveBeenCalled();
   });
 
-  it("30. declining a prepared one-shot clears its grant without changing schemas", async () => {
-    const harness = createHarness({ confirmed: false });
+  it("30. decline keeps session permission and schemas stable", async () => {
+    const harness = createHarness();
     const initialTools = harness.activeTools();
-    await beginPreparation(harness);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
+    harness.ctx.ui.confirm.mockResolvedValueOnce(false);
     await confirmPreparation(harness);
     expect(harness.activeTools()).toEqual(initialTools);
-    await expect(confirmPreparation(harness)).rejects.toThrow("not authorized");
+    const retry = await confirmPreparation(harness);
+    expect(retry.details.status).toBe("queued");
   });
 
   it("31. decline under session allow retains policy and directs waiting", async () => {
     const harness = createHarness({ confirmed: false });
     await harness.command().handler("agent-driven-allow", harness.ctx);
-    await beginPreparation(harness);
     const result = await confirmPreparation(harness);
     expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
     expect(result.content[0].text).toContain("Do not retry automatically");
@@ -1609,7 +1610,7 @@ describe("final confirmation", () => {
 
   it("33. concurrent calls cannot open multiple dialogs or workflows", async () => {
     const harness = createHarness();
-    await beginPreparation(harness);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     const confirmation = deferred<boolean>();
     harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
     const first = confirmPreparation(harness);
@@ -1661,11 +1662,11 @@ describe("final confirmation", () => {
     });
   });
 
-  it("36. user-confirmed continue may conservatively downgrade to stop", async () => {
+  it("36. authorized continue may conservatively downgrade to stop", async () => {
     const harness = createHarness();
     const request = await beginPreparedSummary(harness);
     expect(request.content).toContain(
-      "confirmed continue authorizes continuation but does not force it",
+      "authorized continue permits continuation but does not force it",
     );
     await expect(recordSummaryDecision(harness, "stop")).resolves.toMatchObject(
       {
@@ -1693,7 +1694,9 @@ describe("force path", () => {
 
   it("39. force rejects during confirmation and another workflow", async () => {
     const confirmationHarness = createHarness();
-    await beginPreparation(confirmationHarness);
+    await confirmationHarness
+      .command()
+      .handler("agent-driven-allow", confirmationHarness.ctx);
     const confirmation = deferred<boolean>();
     confirmationHarness.ctx.ui.confirm.mockReturnValueOnce(
       confirmation.promise,
@@ -1771,7 +1774,7 @@ describe("abort command", () => {
 
   it("cancels an open confirmation without starting summary", async () => {
     const harness = createHarness();
-    await beginPreparation(harness);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     const confirmation = deferred<boolean>();
     harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
     const pending = confirmPreparation(harness);
@@ -2289,9 +2292,9 @@ describe("preserved workflow regressions", () => {
     expect(filtered.messages).toEqual([unrelated]);
   });
 
-  it("cancels confirmation errors and clears one-shot authorization", async () => {
+  it("cancels confirmation errors and keeps schemas stable", async () => {
     const harness = createHarness();
-    await beginPreparation(harness);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     harness.ctx.ui.confirm.mockRejectedValueOnce(new Error("dialog closed"));
     const result = await confirmPreparation(harness);
     expect(result.details.status).toBe("canceled");
@@ -2302,7 +2305,7 @@ describe("preserved workflow regressions", () => {
   it("deny revokes authorization while confirmation is open", async () => {
     const harness = createHarness();
     const initialTools = harness.activeTools();
-    await beginPreparation(harness);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     const confirmation = deferred<boolean>();
     harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
     const pending = confirmPreparation(harness);
@@ -2423,7 +2426,7 @@ describe("summary helper contracts", () => {
     ]);
   });
 
-  it("restores every full preparation value after confirmation rendering", async () => {
+  it("restores every full preparation value after run authorization", async () => {
     const runExtraContext =
       "one two three four five six seven eight nine ten eleven twelve";
     const nextAction =
@@ -2441,6 +2444,7 @@ describe("summary helper contracts", () => {
 
     const restoredMessage = harness.messages(CONTEXT_MESSAGE_TYPE)[0];
     expect(restoredMessage.details.preparation).toEqual({
+      authorization: "prepared-no-confirm",
       expectedContinuation: "continue",
       nextAction,
       runExtraContext,
@@ -2543,7 +2547,7 @@ describe("stable-schema runtime gates", () => {
 
   it("rechecks internal-tool availability after confirmation opens", async () => {
     const harness = createHarness();
-    await beginPreparation(harness);
+    await harness.command().handler("agent-driven-allow", harness.ctx);
     const confirmation = deferred<boolean>();
     harness.ctx.ui.confirm.mockReturnValueOnce(confirmation.promise);
     const pending = confirmPreparation(harness);
