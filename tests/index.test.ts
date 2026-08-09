@@ -2198,6 +2198,43 @@ describe("preserved workflow regressions", () => {
     expect(entryLines[1]).toBe("short");
   });
 
+  it("does not duplicate active phase progress notifications", async () => {
+    const idle = createHarness();
+    await idle.command().handler("force", idle.ctx);
+    expect(idle.ctx.ui.notify).not.toHaveBeenCalledWith(
+      "Recording continuation decision.",
+      "info",
+    );
+
+    const prepared = createHarness();
+    await beginPreparation(prepared);
+    await confirmPreparation(prepared);
+    expect(prepared.ctx.ui.notify).not.toHaveBeenCalledWith(
+      "Creating super-summary.",
+      "info",
+    );
+
+    const idleWithContext = createHarness();
+    await idleWithContext
+      .command()
+      .handler("force preserve the current constraints", idleWithContext.ctx);
+    expect(idleWithContext.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Extra instructions: preserve the current constraints",
+      "info",
+    );
+    expect(idleWithContext.ctx.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("Recording continuation decision."),
+      "info",
+    );
+
+    const busy = createHarness({ idle: false });
+    await busy.command().handler("force", busy.ctx);
+    expect(busy.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Supercompaction queued; finishing the current tool batch first.",
+      "info",
+    );
+  });
+
   it("restores the exact visible summary and continues after compaction", async () => {
     const harness = createHarness();
     await beginForceSummary(harness, "", "continue");

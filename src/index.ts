@@ -1070,23 +1070,15 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     if (preparationGrant && preparation) preparationGrant.consumed = true;
     updateStatus(ctx);
 
-    if (extraContext) {
+    if (!idle) {
       notify(
         ctx,
-        `${idle ? (prepared ? "Creating super-summary." : "Recording continuation decision.") : "Supercompaction queued; finishing the current tool batch first."}\nExtra instructions: ${extraContext}`,
+        extraContext
+          ? `Supercompaction queued; finishing the current tool batch first.\nExtra instructions: ${extraContext}`
+          : "Supercompaction queued; finishing the current tool batch first.",
       );
-    } else if (!idle) {
-      notify(
-        ctx,
-        "Supercompaction queued; finishing the current tool batch first.",
-      );
-    } else {
-      notify(
-        ctx,
-        prepared
-          ? "Creating super-summary."
-          : "Recording continuation decision.",
-      );
+    } else if (extraContext) {
+      notify(ctx, `Extra instructions: ${extraContext}`);
     }
 
     try {

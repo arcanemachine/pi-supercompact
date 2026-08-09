@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Avoid duplicating active decision and summary progress notifications alongside Pi's working indicator; queued work and explicit extra context remain visible.
 - Ignore unexpected internal decision calls silently outside the dedicated decision phase, preventing normal prompts from entering corrective retry loops.
 - Avoid redundant continuation turns for prepared requests by carrying their validated outcome directly into the Markdown summary; unprepared decision turns now tolerate incidental prose around one valid decision call and render concrete validation errors.
 - Split continuation control from canonical handoff generation: record the short validated decision in its own tool-only turn, then generate the long Markdown summary without a follow-up tool call; native compaction starts automatically after valid summary prose.
