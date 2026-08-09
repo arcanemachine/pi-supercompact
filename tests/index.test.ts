@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import extension, {
   buildConfirmationText,
@@ -2168,6 +2169,34 @@ describe("preserved workflow regressions", () => {
     ).toEqual(["The decision call was mixed with another tool."]);
   });
 
+  it("keeps custom renderer lines within the requested width", () => {
+    const harness = createHarness();
+    const width = 154;
+    const longMessage = "x".repeat(width + 5);
+    const tool = harness.decisionTool();
+
+    const toolLines = tool
+      .renderResult(
+        { content: [{ type: "text", text: longMessage }] },
+        {},
+        {},
+        { isError: true },
+      )
+      .render(width);
+    expect(toolLines).toHaveLength(1);
+    expect(visibleWidth(toolLines[0]!)).toBe(width);
+    expect(toolLines[0]).toContain("x".repeat(width));
+
+    const entryLines = harness
+      .entryRenderer()({ data: { message: `${longMessage}\nshort` } }, {}, {})
+      .render(width);
+    expect(entryLines.map((line: string) => visibleWidth(line))).toEqual([
+      width,
+      5,
+    ]);
+    expect(entryLines[1]).toBe("short");
+  });
+
   it("restores the exact visible summary and continues after compaction", async () => {
     const harness = createHarness();
     await beginForceSummary(harness, "", "continue");
@@ -2401,7 +2430,7 @@ describe("durable continuation outcome", () => {
             {},
             {},
           )
-          .render(80),
+          .render(200),
       ).toEqual([expectedMessage]);
       expect(harness.ctx.ui.notify).not.toHaveBeenCalledWith(
         expectedMessage,

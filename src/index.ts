@@ -7,6 +7,7 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const PREPARATION_REQUEST_TYPE = "pi-supercompact:preparation-request";
@@ -398,7 +399,12 @@ function isDecisionToolCallPart(value: unknown): boolean {
 
 function staticComponent(lines: string[]) {
   return {
-    render: () => lines,
+    render: (width: number) => {
+      const maxWidth = Math.max(0, width);
+      return lines.flatMap((line) =>
+        line.split(/\r?\n/).map((part) => truncateToWidth(part, maxWidth, "")),
+      );
+    },
     invalidate: () => {},
   };
 }
