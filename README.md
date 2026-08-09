@@ -79,7 +79,7 @@ Use `/supercompact auto-enable` or `/supercompact auto-disable` to override the 
 3. Lets the agent finish already-authorized work that needs no new input, refresh relevant durable context, and verify or persist work when applicable.
 4. Requires the agent to surface blockers or questions, choose whether work should continue, and name one exact next action.
 5. Treats the run command itself as explicit user authorization, exactly like `force`: no final confirmation dialog opens, even headlessly or while a live-session agent-driven permission mode is active.
-6. Starts the canonical summary and native compaction directly from that authorization.
+6. Starts the dedicated continuation decision, canonical summary, and native compaction directly from that authorization.
 
 The checkpoint follows the active session's scope and rules. It does not assume that every session has a repository, files to edit, validation to run, or changes to commit.
 
@@ -92,7 +92,7 @@ If user input is required, the agent asks and waits. The one-off authorization r
 /supercompact force stop after compaction
 ```
 
-`force` immediately starts the canonical summary and native compaction workflow. It bypasses preparation and final confirmation because the command itself is explicit user authorization. It remains available when agent-driven requests are denied.
+`force` immediately starts the continuation-decision, canonical-summary, and native-compaction workflow. It bypasses preparation and final confirmation because the command itself is explicit user authorization. It remains available when agent-driven requests are denied.
 
 ### Allow one agent-driven request without confirmation
 
@@ -177,7 +177,7 @@ The extension registers these tools once when it loads and keeps their schemas a
 - `supercompact` — the public request interface
 - `record_supercompact_decision` — internal canonical-summary workflow control
 
-Tool visibility does not grant authority. The public tool checks effective session permission, an unused `run` grant, or an armed one-shot no-confirm grant; workflow and confirmation state; internal-tool availability; exact-next-action validity; UI capability when the active mode requires it; and authorization again at the last applicable boundary. The internal tool accepts a call only during the canonical-summary phase with a valid non-empty handoff, exactly one decision call, no other tool calls, and all confirmed stop constraints intact.
+Tool visibility does not grant authority. The public tool checks effective session permission, an unused `run` grant, or an armed one-shot no-confirm grant; workflow and confirmation state; internal-tool availability; exact-next-action validity; UI capability when the active mode requires it; and authorization again at the last applicable boundary. The internal tool accepts exactly one short call only during the dedicated continuation-decision phase, with no prose or other tool calls, and all confirmed stop constraints intact. The following canonical-summary phase accepts only a non-empty ordinary Markdown handoff and no tool calls.
 
 The extension never changes Pi's active tool selection to enforce permission. If the user or host excludes a required extension tool, the extension respects that choice. `run` and `force` fail before creating workflow state when required tools are unavailable, and explain that the tool must be re-enabled or the extension reloaded with its tools available. `agent-driven-allow`, `agent-driven-allow-noconfirm`, `agent-driven-allow-noconfirm-once`, and `agent-driven-deny` still update or arm session-local permission while reporting that execution remains unavailable. `abort` never changes the active tool selection.
 
@@ -213,22 +213,23 @@ The hidden preparation prompt asks the agent to:
 
 The confirmation dialog whitespace-normalizes agent-created values — the next action and additional summary context — and limits them to the first 10 words plus `…` when longer. Major blocks are separated by one blank line. The complete values remain unchanged in workflow state, the canonical summary prompt, restored context, and continuation metadata, and user-supplied run context always travels in full through the same paths even though it never appears in a dialog.
 
-When confirmation is required, the extension locks it before opening the dialog and rechecks authorization afterward. Configured or live-session no-confirm permission opens no dialog and begins the same guarded canonical-summary path directly; an explicit `run` or `force` also opens no dialog because the command is the authorization. A confirmed or explicitly authorized `stop` is a hard constraint. A `continue` choice is permission, not a mandate: the summary decision may conservatively choose `stop` when work is complete, blocked, awaiting input, or uncertain.
+When confirmation is required, the extension locks it before opening the dialog and rechecks authorization afterward. Configured or live-session no-confirm permission opens no dialog and begins the same guarded canonical-summary path directly; an explicit `run` or `force` also opens no dialog because the command is the authorization. A confirmed or explicitly authorized `stop` is a hard constraint. A `continue` choice is permission, not a mandate: the dedicated decision phase may conservatively choose `stop` when work is complete, blocked, awaiting input, or uncertain.
 
 ### Canonical summary workflow
 
 After force, accepted confirmation, or an authorized no-confirm request, the extension:
 
-1. Queues a hidden full-context summarization prompt as steering work.
-2. Keeps the generated handoff in the transcript as ordinary assistant Markdown.
-3. Records a schema-validated `continue` or `stop` decision through the internal tool.
-4. Runs Pi's native compaction after the summary turn settles.
-5. Restores the exact handoff invisibly with authorized preparation metadata.
-6. Continues once or waits according to the validated decision.
+1. Queues a short, dedicated continuation-decision turn.
+2. Records a schema-validated `continue` or `stop` decision through the internal tool, with no prose or other tool calls allowed.
+3. Queues a separate full-context canonical-summary turn.
+4. Keeps the generated handoff as ordinary assistant Markdown; this turn accepts no tool calls.
+5. Runs Pi's native compaction automatically after valid summary prose settles.
+6. Restores the exact handoff invisibly with authorized preparation metadata.
+7. Continues once or waits according to the validated decision.
 
-During the dedicated summary turn, runtime guards block all other tools and reject internal calls outside the required workflow phase. Successful internal control calls are hidden from transcript presentation and terminate the turn without an acknowledgement round trip.
+The split keeps the long handoff in ordinary Markdown while making the required tool call short and isolated. Successful internal control calls are hidden from transcript presentation and terminate the decision turn without an acknowledgement round trip.
 
-When the decision is recorded, the extension shows the continue-or-wait outcome once as a durable TUI transcript entry. The entry remains available in scrollback instead of disappearing like a transient notification. It is TUI-only session data: it does not enter model context, trigger another turn, or change the provider prompt prefix.
+After the summary is captured, the extension shows the continue-or-wait outcome once as a durable TUI transcript entry. The entry remains available in scrollback instead of disappearing like a transient notification. It is TUI-only session data: it does not enter model context, trigger another turn, or change the provider prompt prefix.
 
 ### Summary contents
 
@@ -244,7 +245,7 @@ Relevant resources are grouped by work horizon. Exact file paths remain availabl
 
 ### Queue, status, and caching
 
-When Pi is idle, preparation and summary messages trigger an immediate steering turn. While Pi is responding, they are queued with steering semantics so the current tool batch finishes first.
+When Pi is idle, preparation, decision, and summary messages trigger immediate steering turns. While Pi is responding, they are queued with steering semantics so the current tool batch finishes first.
 
 Operational status text is shown while the extension is preparing or awaiting confirmation:
 
@@ -282,8 +283,9 @@ The workflow is bounded and leaves the session usable:
 - Concurrent preparation, confirmation, and compaction requests receive state-specific guidance.
 - Revocation or lifecycle replacement while confirmation is open prevents compaction.
 - Invalid decision arguments use Pi's normal correction loop without making the workflow terminal.
-- If the model omits decision metadata, the extension requests it again without repeating the summary while the automatic correction budget remains.
-- Automatic decision nudges are bounded, but an unsuccessful assistant turn leaves the workflow active for a later retry or resend.
+- If the model omits or mixes the short decision call with prose or other tools, the extension requests the decision again without starting summary generation while the automatic correction budget remains.
+- If the summary is empty, truncated, errored, or includes a tool call, the extension requests only the Markdown handoff again without repeating the decision.
+- Decision and summary correction nudges are bounded, but an unsuccessful assistant turn leaves the workflow active for a later retry or resend.
 - `/supercompact abort` cancels extension-controlled work before native compaction; idle use reports an error.
 - Aborted, errored, truncated, or unusable summary turns never start manual compaction and do not discard the active workflow.
 - Native compaction failure prevents final context restoration, and active native compaction must be canceled through Escape or the host.
