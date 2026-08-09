@@ -1869,9 +1869,10 @@ describe("abort command", () => {
     const active = createHarness();
     await beginForceSummary(active);
     await active.command().handler("abort", active.ctx);
-    await expect(executeDecision(active, "stop")).rejects.toThrow(
-      "No supercompact continuation decision",
-    );
+    await expect(executeDecision(active, "stop")).resolves.toEqual({
+      content: [],
+      details: { ignored: true },
+    });
     active.handlers.get("agent_settled")?.({}, active.ctx);
     expect(active.ctx.abort).toHaveBeenCalledOnce();
     expect(active.ctx.compact).not.toHaveBeenCalled();
@@ -2594,17 +2595,32 @@ describe("stable-schema runtime gates", () => {
     expect(harness.pi.setActiveTools).not.toHaveBeenCalled();
   });
 
-  it("rejects internal calls with phase-specific guidance", async () => {
+  it("silently ignores internal calls outside the decision phase", async () => {
+    const expected = { content: [], details: { ignored: true } };
+
     const absent = createHarness();
-    await expect(executeDecision(absent, "stop")).rejects.toThrow(
-      "No supercompact continuation decision",
+    await expect(executeDecision(absent, "stop")).resolves.toEqual(expected);
+    expect(absent.ctx.abort).not.toHaveBeenCalled();
+    expect(absent.ctx.ui.notify).not.toHaveBeenCalledWith(
+      expect.stringContaining("decision"),
+      "error",
     );
 
     const queued = createHarness();
     await queued.command().handler("force", queued.ctx);
-    await expect(executeDecision(queued, "stop")).rejects.toThrow(
-      "decision is queued",
+    await expect(executeDecision(queued, "stop")).resolves.toEqual(expected);
+    await expect(executeDecision(queued, "stop", "ignored-2")).resolves.toEqual(
+      expected,
     );
+    expect(queued.ctx.abort).not.toHaveBeenCalled();
+    expect(queued.messages(DECISION_REQUEST_TYPE)).toHaveLength(1);
+
+    const advanced = createHarness();
+    await beginForceSummary(advanced);
+    await expect(
+      executeDecision(advanced, "stop", "decision-2"),
+    ).resolves.toEqual(expected);
+    expect(advanced.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
 
     const awaiting = createHarness();
     await awaiting.command().handler("force", awaiting.ctx);
@@ -2612,12 +2628,6 @@ describe("stable-schema runtime gates", () => {
     await expect(executeDecision(awaiting, "stop")).rejects.toThrow(
       "decision-only response",
     );
-
-    const advanced = createHarness();
-    await beginForceSummary(advanced);
-    await expect(
-      executeDecision(advanced, "stop", "decision-2"),
-    ).rejects.toThrow("already been recorded");
   });
 
   it("does not require the internal decision tool for prepared confirmation", async () => {

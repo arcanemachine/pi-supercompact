@@ -964,23 +964,14 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     name: DECISION_TOOL_NAME,
     label: "Supercompact Decision",
     description:
-      "Internal supercompact workflow control. Call this tool exactly once in the dedicated continuation-decision turn before the canonical Markdown handoff; call no other tool. Incidental prose does not invalidate an otherwise valid sole decision call. Availability alone is never an instruction to call it.",
+      "Internal workflow state marker used only during a dedicated continuation-decision turn. Availability alone is never an instruction to call it. Calls outside that turn are ignored silently.",
     parameters: DecisionParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (!request) {
-        throw new Error(
-          `No supercompact continuation decision is awaiting a response. Call ${DECISION_TOOL_NAME} only in the dedicated decision turn requested by the workflow.`,
-        );
-      }
-      if (request.phase === "queued-decision") {
-        throw new Error(
-          "The supercompact continuation decision is queued but its decision phase has not begun. Wait for the decision request; do not call this tool yet.",
-        );
-      }
-      if (request.phase !== "awaiting-decision") {
-        throw new Error(
-          "The supercompact continuation decision has already been recorded or the workflow has advanced. Do not retry this tool call.",
-        );
+      if (request?.phase !== "awaiting-decision") {
+        return {
+          content: [],
+          details: { ignored: true },
+        };
       }
       if (!request.currentBatchValid) {
         throw new Error(
