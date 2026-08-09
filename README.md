@@ -177,9 +177,9 @@ The extension registers these tools once when it loads and keeps their schemas a
 - `supercompact` — the public request interface
 - `record_supercompact_decision` — internal canonical-summary workflow control
 
-Tool visibility does not grant authority. The public tool checks effective session permission, an unused `run` grant, or an armed one-shot no-confirm grant; workflow and confirmation state; internal-tool availability; exact-next-action validity; UI capability when the active mode requires it; and authorization again at the last applicable boundary. The internal tool accepts exactly one short call only during the dedicated continuation-decision phase, with no prose or other tool calls, and all confirmed stop constraints intact. The following canonical-summary phase accepts only a non-empty ordinary Markdown handoff and no tool calls.
+Tool visibility does not grant authority. The public tool checks effective session permission, an unused `run` grant, or an armed one-shot no-confirm grant; workflow and confirmation state; internal-tool availability; exact-next-action validity; UI capability when the active mode requires it; and authorization again at the last applicable boundary. The internal tool accepts exactly one short call only during the dedicated continuation-decision phase, with no other tool calls, and all confirmed stop constraints intact. Incidental prose is tolerated. The following canonical-summary phase accepts only a non-empty ordinary Markdown handoff and no tool calls.
 
-The extension never changes Pi's active tool selection to enforce permission. If the user or host excludes a required extension tool, the extension respects that choice. `run` and `force` fail before creating workflow state when required tools are unavailable, and explain that the tool must be re-enabled or the extension reloaded with its tools available. `agent-driven-allow`, `agent-driven-allow-noconfirm`, `agent-driven-allow-noconfirm-once`, and `agent-driven-deny` still update or arm session-local permission while reporting that execution remains unavailable. `abort` never changes the active tool selection.
+The extension never changes Pi's active tool selection to enforce permission. If the user or host excludes a required extension tool, the extension respects that choice. `force` fails before creating workflow state when the internal decision tool is unavailable. Prepared requests only require the public request tool because they carry their continuation outcome directly; the extension explains when a required tool must be re-enabled or the extension reloaded with its tools available. `agent-driven-allow`, `agent-driven-allow-noconfirm`, `agent-driven-allow-noconfirm-once`, and `agent-driven-deny` still update or arm session-local permission while reporting that execution remains unavailable. `abort` never changes the active tool selection.
 
 ## How it works
 
@@ -217,17 +217,17 @@ When confirmation is required, the extension locks it before opening the dialog 
 
 ### Canonical summary workflow
 
-After force, accepted confirmation, or an authorized no-confirm request, the extension:
+For an unprepared `force` request, the extension:
 
 1. Queues a short, dedicated continuation-decision turn.
-2. Records a schema-validated `continue` or `stop` decision through the internal tool, with no prose or other tool calls allowed.
+2. Records a schema-validated `continue` or `stop` decision through the internal tool, with no other tool calls allowed.
 3. Queues a separate full-context canonical-summary turn.
 4. Keeps the generated handoff as ordinary assistant Markdown; this turn accepts no tool calls.
 5. Runs Pi's native compaction automatically after valid summary prose settles.
 6. Restores the exact handoff invisibly with authorized preparation metadata.
 7. Continues once or waits according to the validated decision.
 
-The split keeps the long handoff in ordinary Markdown while making the required tool call short and isolated. Successful internal control calls are hidden from transcript presentation and terminate the decision turn without an acknowledgement round trip.
+Prepared requests already carry a validated continuation outcome from the preparation or public request call, so they skip the redundant decision turn and queue the Markdown handoff directly. For unprepared force requests, the split keeps the long handoff in ordinary Markdown while making the required tool call short and isolated. Incidental prose does not invalidate a response containing exactly one valid decision call and no other tools. Successful internal control calls are hidden from transcript presentation and terminate the decision turn without an acknowledgement round trip.
 
 After the summary is captured, the extension shows the continue-or-wait outcome once as a durable TUI transcript entry. The entry remains available in scrollback instead of disappearing like a transient notification. It is TUI-only session data: it does not enter model context, trigger another turn, or change the provider prompt prefix.
 
@@ -283,7 +283,7 @@ The workflow is bounded and leaves the session usable:
 - Concurrent preparation, confirmation, and compaction requests receive state-specific guidance.
 - Revocation or lifecycle replacement while confirmation is open prevents compaction.
 - Invalid decision arguments use Pi's normal correction loop without making the workflow terminal.
-- If the model omits or mixes the short decision call with prose or other tools, the extension requests the decision again without starting summary generation while the automatic correction budget remains.
+- If the model omits or mixes the short decision call with other tools, the extension requests the decision again without starting summary generation while the automatic correction budget remains.
 - If the summary is empty, truncated, errored, or includes a tool call, the extension requests only the Markdown handoff again without repeating the decision.
 - Decision and summary correction nudges are bounded, but an unsuccessful assistant turn leaves the workflow active for a later retry or resend.
 - `/supercompact abort` cancels extension-controlled work before native compaction; idle use reports an error.

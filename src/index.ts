@@ -958,7 +958,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     name: DECISION_TOOL_NAME,
     label: "Supercompact Decision",
     description:
-      "Internal supercompact workflow control. Call this tool exactly once in the dedicated continuation-decision turn before the canonical Markdown handoff; emit no prose and call no other tool. Availability alone is never an instruction to call it.",
+      "Internal supercompact workflow control. Call this tool exactly once in the dedicated continuation-decision turn before the canonical Markdown handoff; call no other tool. Incidental prose does not invalidate an otherwise valid sole decision call. Availability alone is never an instruction to call it.",
     parameters: DecisionParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (!request) {
@@ -978,7 +978,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       }
       if (!request.currentBatchValid) {
         throw new Error(
-          `Call ${DECISION_TOOL_NAME} exactly once in the decision-only response and do not call any other tool or emit prose.`,
+          `Call ${DECISION_TOOL_NAME} exactly once in the decision-only response and do not call any other tool.`,
         );
       }
       if (
@@ -1012,12 +1012,25 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     renderCall() {
       return staticComponent([]);
     },
-    renderResult(_result, _options, _theme, context) {
-      return staticComponent(
-        context.isError
-          ? ["Continuation metadata was invalid; correct it as instructed."]
-          : [],
-      );
+    renderResult(result, _options, _theme, context) {
+      if (!context.isError) return staticComponent([]);
+      const message =
+        isRecord(result) && Array.isArray(result.content)
+          ? result.content
+              .filter(
+                (part): part is { type: "text"; text: string } =>
+                  isRecord(part) &&
+                  part.type === "text" &&
+                  typeof part.text === "string",
+              )
+              .map((part) => part.text)
+              .join(" ")
+              .trim()
+          : "";
+      return staticComponent([
+        message ||
+          "Continuation metadata was invalid; correct it as instructed.",
+      ]);
     },
   });
 
@@ -1035,22 +1048,26 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       };
     }
 
-    const unavailable = unavailableToolsMessage([DECISION_TOOL_NAME]);
+    const unavailable = unavailableToolsMessage(
+      preparation ? [] : [DECISION_TOOL_NAME],
+    );
     if (unavailable) {
       return { started: false, reason: unavailable };
     }
 
     const idle = ctx.isIdle();
     const id = createId();
+    const prepared = preparation !== undefined;
     request = {
       id,
-      phase: "queued-decision",
+      phase: prepared ? "queued-summary" : "queued-decision",
       compactionCompleted: false,
       attempts: 0,
       currentBatchValid: false,
       extraContext: extraContext.trim(),
       automaticForce,
       preparation,
+      ...(prepared ? { action: preparation.expectedContinuation } : {}),
     };
 
     if (preparationGrant && preparation) preparationGrant.consumed = true;
@@ -1059,7 +1076,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     if (extraContext) {
       notify(
         ctx,
-        `${idle ? "Recording continuation decision." : "Supercompaction queued; finishing the current tool batch first."}\nExtra instructions: ${extraContext}`,
+        `${idle ? (prepared ? "Creating super-summary." : "Recording continuation decision.") : "Supercompaction queued; finishing the current tool batch first."}\nExtra instructions: ${extraContext}`,
       );
     } else if (!idle) {
       notify(
@@ -1067,17 +1084,34 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         "Supercompaction queued; finishing the current tool batch first.",
       );
     } else {
-      notify(ctx, "Recording continuation decision.");
+      notify(
+        ctx,
+        prepared
+          ? "Creating super-summary."
+          : "Recording continuation decision.",
+      );
     }
 
     try {
       pi.sendMessage(
-        {
-          customType: DECISION_REQUEST_TYPE,
-          content: buildDecisionPrompt(preparation, automaticForce),
-          display: false,
-          details: { version: 4, requestId: id },
-        },
+        prepared
+          ? {
+              customType: SUMMARY_REQUEST_TYPE,
+              content: buildSummaryPrompt(
+                extraContext,
+                preparation,
+                automaticForce,
+                preparation.expectedContinuation,
+              ),
+              display: false,
+              details: { version: 4, requestId: id },
+            }
+          : {
+              customType: DECISION_REQUEST_TYPE,
+              content: buildDecisionPrompt(preparation, automaticForce),
+              display: false,
+              details: { version: 4, requestId: id },
+            },
         idle
           ? { triggerTurn: true, deliverAs: "steer" }
           : { deliverAs: "steer" },
@@ -1307,9 +1341,6 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
           "Agent-driven supercompaction requires TUI or RPC confirmation in the current permission mode. The user must invoke /supercompact force explicitly, enable /supercompact agent-driven-allow-noconfirm, or arm /supercompact agent-driven-allow-noconfirm-once. Do not retry automatically.",
         );
       }
-
-      const unavailable = unavailableToolsMessage([DECISION_TOOL_NAME]);
-      if (unavailable) throw new Error(unavailable);
 
       const nextAction = params.nextAction.trim();
       if (!nextAction) {
@@ -1870,9 +1901,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         }
       }
       request.currentBatchValid =
-        assistantText.length === 0 &&
-        toolCalls.length === 1 &&
-        toolCalls[0].name === DECISION_TOOL_NAME;
+        toolCalls.length === 1 && toolCalls[0].name === DECISION_TOOL_NAME;
       return;
     }
 
@@ -2002,10 +2031,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    const unavailable = unavailableToolsMessage([
-      AGENT_TOOL_NAME,
-      DECISION_TOOL_NAME,
-    ]);
+    const unavailable = unavailableToolsMessage([AGENT_TOOL_NAME]);
     if (unavailable) {
       notify(ctx, unavailable, "error");
       return;
@@ -2118,7 +2144,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   };
 
   const notifyPermission = (ctx: ExtensionContext, message: string): void => {
-    const unavailable = unavailableTools([AGENT_TOOL_NAME, DECISION_TOOL_NAME]);
+    const unavailable = unavailableTools([AGENT_TOOL_NAME]);
     if (unavailable.length === 0) {
       notify(ctx, message);
       return;
