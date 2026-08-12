@@ -1161,6 +1161,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     }
 
     request.phase = "compacting";
+    setWorkingMessage(ctx);
     const outcomeMessage =
       request.action === "continue"
         ? "Super-summary prepared. After compaction, the agent will continue working."
