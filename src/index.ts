@@ -944,6 +944,22 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     if (preparationGrant?.consumed) preparationGrant = undefined;
   };
 
+  const cancelPreNativeWorkflow = (ctx: ExtensionContext): boolean => {
+    if (
+      request &&
+      (request.phase === "compacting" || request.compactionCompleted)
+    ) {
+      return false;
+    }
+    if (!request && !preparationGrant) return false;
+
+    request = undefined;
+    preparationGrant = undefined;
+    clearDecisionState(ctx);
+    updateStatus(ctx);
+    return true;
+  };
+
   const fail = (ctx: ExtensionContext, message: string): void => {
     clearDecisionState(ctx);
     request = undefined;
@@ -1841,6 +1857,20 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("message_end", (event, ctx) => {
+    if (
+      event.message.role === "assistant" &&
+      event.message.stopReason === "aborted"
+    ) {
+      if (cancelPreNativeWorkflow(ctx)) {
+        notify(
+          ctx,
+          "Supercompaction was aborted before native compaction began.",
+          "warning",
+        );
+      }
+      return;
+    }
+
     if (!request) return;
 
     if (
@@ -1871,16 +1901,15 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    request.attempts += 1;
+
     if (
-      event.message.stopReason === "aborted" ||
       event.message.stopReason === "error" ||
       event.message.stopReason === "length"
     ) {
       request.currentBatchValid = false;
       return;
     }
-
-    request.attempts += 1;
     const assistantText = textFromAssistant(event.message);
     const toolCalls = toolCallsFromAssistant(event.message);
 

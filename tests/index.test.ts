@@ -2259,7 +2259,59 @@ describe("preserved workflow regressions", () => {
     expect(options).toEqual({ triggerTurn: true, deliverAs: "steer" });
   });
 
-  it.each(["aborted", "error", "length"])(
+  it("cancels a queued decision workflow after an aborted assistant turn", async () => {
+    const harness = createHarness({ idle: false });
+    await harness.command().handler("force", harness.ctx);
+
+    harness.handlers.get("message_end")?.(
+      assistantMessage("", [], "aborted"),
+      harness.ctx,
+    );
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+
+    expect(harness.messages(DECISION_REQUEST_TYPE)).toHaveLength(1);
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(0);
+    expect(harness.ctx.compact).not.toHaveBeenCalled();
+    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+      "Supercompaction was aborted before native compaction began.",
+      "warning",
+    );
+  });
+
+  it("cancels the summary workflow after an aborted assistant turn", async () => {
+    const harness = createHarness();
+    const summaryRequest = await beginForceSummary(harness);
+    harness.handlers.get("message_end")?.(
+      assistantMessage("", [], "aborted"),
+      harness.ctx,
+    );
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+
+    expect(harness.ctx.abort).not.toHaveBeenCalled();
+    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+      "Supercompaction was aborted before native compaction began.",
+      "warning",
+    );
+    expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
+    expect(
+      harness.handlers.get("context")?.(
+        {
+          type: "context",
+          messages: [customMessage(summaryRequest).message],
+        },
+        harness.ctx,
+      ),
+    ).toEqual({ messages: [] });
+
+    harness.handlers.get("message_end")?.(
+      assistantMessage("## State\nShould be ignored."),
+      harness.ctx,
+    );
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+    expect(harness.ctx.compact).not.toHaveBeenCalled();
+  });
+
+  it.each(["error", "length"])(
     "keeps the summary workflow active after a %s response",
     async (stopReason) => {
       const harness = createHarness();
@@ -2290,6 +2342,47 @@ describe("preserved workflow regressions", () => {
       expect(harness.ctx.compact).toHaveBeenCalledOnce();
     },
   );
+
+  it.each(["error", "length"])(
+    "bounds %s correction turns while preserving recovery",
+    async (stopReason) => {
+      const harness = createHarness();
+      await beginForceSummary(harness);
+
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        harness.handlers.get("message_end")?.(
+          assistantMessage("", [], stopReason),
+          harness.ctx,
+        );
+        harness.handlers.get("agent_settled")?.({}, harness.ctx);
+      }
+
+      expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(3);
+      expect(harness.ctx.abort).not.toHaveBeenCalled();
+      await recordSummaryDecision(harness, "stop");
+      harness.handlers.get("agent_settled")?.({}, harness.ctx);
+      expect(harness.ctx.compact).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("cancels a preparation workflow after an aborted assistant turn", async () => {
+    const harness = createHarness();
+    await beginPreparation(harness);
+
+    harness.handlers.get("message_end")?.(
+      assistantMessage("", [], "aborted"),
+      harness.ctx,
+    );
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+
+    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+      "Supercompaction was aborted before native compaction began.",
+      "warning",
+    );
+    await expect(confirmPreparation(harness)).rejects.toThrow(
+      /\/supercompact (run|agent-driven-allow|agent-driven-allow-noconfirm|agent-driven-allow-noconfirm-once)/,
+    );
+  });
 
   it("keeps requesting an omitted Markdown handoff without failing the workflow", async () => {
     const harness = createHarness();

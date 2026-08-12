@@ -285,9 +285,9 @@ The workflow is bounded and leaves the session usable:
 - Invalid decision arguments use Pi's normal correction loop without making the workflow terminal.
 - If the model omits or mixes the short decision call with other tools, the extension requests the decision again without starting summary generation while the automatic correction budget remains.
 - If the summary is empty, truncated, errored, or includes a tool call, the extension requests only the Markdown handoff again without repeating the decision.
-- Decision and summary correction nudges are bounded, but an unsuccessful assistant turn leaves the workflow active for a later retry or resend.
-- `/supercompact abort` cancels extension-controlled work before native compaction; idle use reports an error.
-- Aborted, errored, truncated, or unusable summary turns never start manual compaction and do not discard the active workflow.
+- Decision and summary correction nudges are bounded. Provider errors, truncation, and unusable responses leave the workflow active for a later retry or resend while the correction budget remains; pressing Escape cancels the extension-controlled workflow instead of requesting another correction.
+- `/supercompact abort` cancels extension-controlled work before native compaction; pressing Escape has the same effect while preparation, decision, or canonical-summary work is active. Idle `/supercompact abort` use reports an error.
+- Aborted, errored, truncated, or unusable summary turns never start manual compaction. An Escape abort clears the active pre-native workflow; provider errors and truncation preserve it for bounded recovery.
 - Native compaction failure prevents final context restoration, and active native compaction must be canceled through Escape or the host.
 - Queueing and compaction failures preserve the specific reason and do not retry automatically; a one-shot grant is retained only when canonical-summary work was never successfully queued.
 - Every exit path restores Pi's working message and clears confirmation and decision state without changing tool schemas.
