@@ -552,6 +552,26 @@ describe("commands and menu", () => {
     );
   });
 
+  it("shows flag behavior alongside run and force notifications", async () => {
+    const run = createHarness();
+    await run
+      .command()
+      .handler("run --stop do not do anything after compaction", run.ctx);
+    expect(run.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Pre-compaction wrap started.\nContinuation override: --stop (wait after compaction).\nExtra instructions: do not do anything after compaction",
+      "info",
+    );
+
+    const force = createHarness();
+    await force
+      .command()
+      .handler("force --continue preserve the active objective", force.ctx);
+    expect(force.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Continuation override: --continue (continue authorized work after compaction).\nExtra instructions: preserve the active objective",
+      "info",
+    );
+  });
+
   it("rejects conflicting or unknown leading continuation flags", async () => {
     const harness = createHarness();
     for (const command of [

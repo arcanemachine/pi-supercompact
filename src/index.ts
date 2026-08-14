@@ -60,6 +60,12 @@ function explicitContinuationError(continuation: ContinuationAction): Error {
   );
 }
 
+function continuationOverrideNotification(
+  continuation: ContinuationAction,
+): string {
+  return `Continuation override: --${continuation} (${continuation === "stop" ? "wait after compaction" : "continue authorized work after compaction"}).`;
+}
+
 export interface ParsedSuperSummary {
   action: ContinuationAction;
   summary: string;
@@ -1139,15 +1145,29 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     if (preparationGrant && preparation) preparationGrant.consumed = true;
     updateStatus(ctx);
 
+    const continuationNotice = continuationOverride
+      ? continuationOverrideNotification(continuationOverride)
+      : undefined;
+    const extraInstructions = extraContext
+      ? `Extra instructions: ${extraContext}`
+      : undefined;
     if (!idle) {
       notify(
         ctx,
-        extraContext
-          ? `Supercompaction queued; finishing the current tool batch first.\nExtra instructions: ${extraContext}`
-          : "Supercompaction queued; finishing the current tool batch first.",
+        [
+          "Supercompaction queued; finishing the current tool batch first.",
+          ...(continuationNotice ? [continuationNotice] : []),
+          ...(extraInstructions ? [extraInstructions] : []),
+        ].join("\n"),
       );
-    } else if (extraContext) {
-      notify(ctx, `Extra instructions: ${extraContext}`);
+    } else if (continuationNotice || extraInstructions) {
+      notify(
+        ctx,
+        [
+          ...(continuationNotice ? [continuationNotice] : []),
+          ...(extraInstructions ? [extraInstructions] : []),
+        ].join("\n"),
+      );
     }
 
     try {
@@ -2153,9 +2173,15 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         : "Pre-compaction wrap queued; finishing the current tool batch first.";
     notify(
       ctx,
-      extraContext.trim()
-        ? `${notification}\nExtra instructions: ${extraContext.trim()}`
-        : notification,
+      [
+        notification,
+        ...(continuationOverride
+          ? [continuationOverrideNotification(continuationOverride)]
+          : []),
+        ...(extraContext.trim()
+          ? [`Extra instructions: ${extraContext.trim()}`]
+          : []),
+      ].join("\n"),
     );
 
     try {

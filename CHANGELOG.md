@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Show explicit continuation overrides alongside run and force progress notifications.
 - Add descriptive command and continuation-flag autocomplete help for `/supercompact` actions.
 - Add authoritative `--stop` and `--continue` flags to explicit `/supercompact run` and `/supercompact force` commands; the selected continuation cannot be changed by the agent and is cleared with the workflow.
 - Treat Escape-aborted preparation, decision, and canonical-summary turns as terminal cancellation instead of automatically starting the same correction turn; provider errors and truncation remain bounded and recoverable.
