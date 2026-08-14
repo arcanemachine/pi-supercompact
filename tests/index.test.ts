@@ -573,26 +573,48 @@ describe("commands and menu", () => {
     const harness = createHarness();
     expect(harness.command().getArgumentCompletions("")).toEqual(
       [
-        "run",
-        "force",
-        "auto-enable",
-        "auto-disable",
-        "agent-driven-allow",
-        "agent-driven-allow-noconfirm",
-        "agent-driven-allow-noconfirm-once",
-        "agent-driven-deny",
-        "abort",
-      ].map((value) => ({
+        ["run", "Prepare a checkpoint; optional --stop or --continue"],
+        ["force", "Compact now; optional --stop or --continue"],
+        ["auto-enable", "Enable automatic supercompaction"],
+        ["auto-disable", "Disable automatic supercompaction"],
+        ["agent-driven-allow", "Allow agent requests with confirmation"],
+        [
+          "agent-driven-allow-noconfirm",
+          "Allow agent requests without confirmation",
+        ],
+        [
+          "agent-driven-allow-noconfirm-once",
+          "Allow one agent request without confirmation",
+        ],
+        [
+          "agent-driven-deny",
+          "Deny agent requests and cancel pending permission",
+        ],
+        ["abort", "Cancel pre-native supercompaction"],
+      ].map(([value, description]) => ({
         value,
         label: value,
+        description,
       })),
     );
     expect(harness.command().getArgumentCompletions("run --")).toEqual([
-      { value: "--stop", label: "--stop" },
-      { value: "--continue", label: "--continue" },
+      {
+        value: "--stop",
+        label: "--stop",
+        description: "Wait after compaction; authoritative",
+      },
+      {
+        value: "--continue",
+        label: "--continue",
+        description: "Continue authorized work; authoritative",
+      },
     ]);
     expect(harness.command().getArgumentCompletions("force --s")).toEqual([
-      { value: "--stop", label: "--stop" },
+      {
+        value: "--stop",
+        label: "--stop",
+        description: "Wait after compaction; authoritative",
+      },
     ]);
   });
 

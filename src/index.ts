@@ -2500,26 +2500,67 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         const flags = ["--stop", "--continue"].filter((flag) =>
           flag.startsWith(flagMatch[1]),
         );
+        const descriptions: Record<string, string> = {
+          "--stop": "Wait after compaction; authoritative",
+          "--continue": "Continue authorized work; authoritative",
+        };
         return flags.length === 0
           ? null
-          : flags.map((flag) => ({ value: flag, label: flag }));
+          : flags.map((flag) => ({
+              value: flag,
+              label: flag,
+              description: descriptions[flag],
+            }));
       }
 
       const commands = [
-        "run",
-        "force",
-        "auto-enable",
-        "auto-disable",
-        "agent-driven-allow",
-        "agent-driven-allow-noconfirm",
-        "agent-driven-allow-noconfirm-once",
-        "agent-driven-deny",
-        "abort",
+        {
+          value: "run",
+          description: "Prepare a checkpoint; optional --stop or --continue",
+        },
+        {
+          value: "force",
+          description: "Compact now; optional --stop or --continue",
+        },
+        {
+          value: "auto-enable",
+          description: "Enable automatic supercompaction",
+        },
+        {
+          value: "auto-disable",
+          description: "Disable automatic supercompaction",
+        },
+        {
+          value: "agent-driven-allow",
+          description: "Allow agent requests with confirmation",
+        },
+        {
+          value: "agent-driven-allow-noconfirm",
+          description: "Allow agent requests without confirmation",
+        },
+        {
+          value: "agent-driven-allow-noconfirm-once",
+          description: "Allow one agent request without confirmation",
+        },
+        {
+          value: "agent-driven-deny",
+          description: "Deny agent requests and cancel pending permission",
+        },
+        {
+          value: "abort",
+          description: "Cancel pre-native supercompaction",
+        },
       ];
-      const matches = commands.filter((command) => command.startsWith(prefix));
+      const matches = commands.filter((command) =>
+        command.value.startsWith(prefix),
+      );
       return matches.length === 0
         ? null
-        : matches.map((command) => ({ value: command, label: command }));
+        : matches.map(({ value, description }) => ({
+            value,
+            label: value,
+            description,
+          }));
     },
     handler: async (args, ctx) => {
       const trimmed = args.trim();
