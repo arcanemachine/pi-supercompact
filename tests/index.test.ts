@@ -573,27 +573,42 @@ describe("commands and menu", () => {
     const harness = createHarness();
     expect(harness.command().getArgumentCompletions("")).toEqual(
       [
-        ["run", "Prepare a checkpoint; optional --stop or --continue"],
-        ["force", "Compact now; optional --stop or --continue"],
-        ["auto-enable", "Enable automatic supercompaction"],
-        ["auto-disable", "Disable automatic supercompaction"],
-        ["agent-driven-allow", "Allow agent requests with confirmation"],
         [
+          "run",
+          "run [--stop | --continue]",
+          "Prepare a checkpoint; use flags to override continuation",
+        ],
+        [
+          "force",
+          "force [--stop | --continue]",
+          "Compact now; use flags to override continuation",
+        ],
+        ["auto-enable", "auto-enable", "Enable automatic supercompaction"],
+        ["auto-disable", "auto-disable", "Disable automatic supercompaction"],
+        [
+          "agent-driven-allow",
+          "agent-driven-allow",
+          "Allow agent requests with confirmation",
+        ],
+        [
+          "agent-driven-allow-noconfirm",
           "agent-driven-allow-noconfirm",
           "Allow agent requests without confirmation",
         ],
         [
           "agent-driven-allow-noconfirm-once",
+          "agent-driven-allow-noconfirm-once",
           "Allow one agent request without confirmation",
         ],
         [
           "agent-driven-deny",
+          "agent-driven-deny",
           "Deny agent requests and cancel pending permission",
         ],
-        ["abort", "Cancel pre-native supercompaction"],
-      ].map(([value, description]) => ({
+        ["abort", "abort", "Cancel pre-native supercompaction"],
+      ].map(([value, label, description]) => ({
         value,
-        label: value,
+        label,
         description,
       })),
     );
@@ -601,19 +616,19 @@ describe("commands and menu", () => {
       {
         value: "--stop",
         label: "--stop",
-        description: "Wait after compaction; authoritative",
+        description: "First option; override continuation to stop",
       },
       {
         value: "--continue",
         label: "--continue",
-        description: "Continue authorized work; authoritative",
+        description: "First option; override continuation to continue",
       },
     ]);
     expect(harness.command().getArgumentCompletions("force --s")).toEqual([
       {
         value: "--stop",
         label: "--stop",
-        description: "Wait after compaction; authoritative",
+        description: "First option; override continuation to stop",
       },
     ]);
   });

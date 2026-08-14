@@ -2501,8 +2501,8 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
           flag.startsWith(flagMatch[1]),
         );
         const descriptions: Record<string, string> = {
-          "--stop": "Wait after compaction; authoritative",
-          "--continue": "Continue authorized work; authoritative",
+          "--stop": "First option; override continuation to stop",
+          "--continue": "First option; override continuation to continue",
         };
         return flags.length === 0
           ? null
@@ -2516,11 +2516,14 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       const commands = [
         {
           value: "run",
-          description: "Prepare a checkpoint; optional --stop or --continue",
+          label: "run [--stop | --continue]",
+          description:
+            "Prepare a checkpoint; use flags to override continuation",
         },
         {
           value: "force",
-          description: "Compact now; optional --stop or --continue",
+          label: "force [--stop | --continue]",
+          description: "Compact now; use flags to override continuation",
         },
         {
           value: "auto-enable",
@@ -2556,9 +2559,9 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       );
       return matches.length === 0
         ? null
-        : matches.map(({ value, description }) => ({
+        : matches.map(({ value, label, description }) => ({
             value,
-            label: value,
+            label: label ?? value,
             description,
           }));
     },
