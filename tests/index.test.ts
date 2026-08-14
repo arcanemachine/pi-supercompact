@@ -272,10 +272,11 @@ function publicParams(
 async function beginPreparation(
   harness: ReturnType<typeof createHarness>,
   extraContext = "",
+  continuationOverride?: "continue" | "stop",
 ) {
-  await harness
-    .command()
-    .handler(extraContext ? `run ${extraContext}` : "run", harness.ctx);
+  const flag = continuationOverride ? ` --${continuationOverride}` : "";
+  const context = extraContext ? ` ${extraContext}` : "";
+  await harness.command().handler(`run${flag}${context}`, harness.ctx);
   const message = harness.messages(PREPARATION_REQUEST_TYPE).at(-1);
   if (!message) throw new Error("preparation request not sent");
   return message;
@@ -336,9 +337,14 @@ async function beginPreparedSummary(
   options: {
     runContext?: string;
     params?: Parameters<typeof publicParams>[0];
+    continuationOverride?: "continue" | "stop";
   } = {},
 ) {
-  await beginPreparation(harness, options.runContext);
+  await beginPreparation(
+    harness,
+    options.runContext,
+    options.continuationOverride,
+  );
   await confirmPreparation(harness, options.params);
   const message = harness.messages(SUMMARY_REQUEST_TYPE).at(-1);
   if (!message) throw new Error("summary request not sent");
@@ -350,10 +356,11 @@ async function beginForceSummary(
   harness: ReturnType<typeof createHarness>,
   extraContext = "",
   continuation: "continue" | "stop" = "stop",
+  continuationOverride?: "continue" | "stop",
 ) {
-  await harness
-    .command()
-    .handler(extraContext ? `force ${extraContext}` : "force", harness.ctx);
+  const flag = continuationOverride ? ` --${continuationOverride}` : "";
+  const context = extraContext ? ` ${extraContext}` : "";
+  await harness.command().handler(`force${flag}${context}`, harness.ctx);
   await beginDecision(harness);
   await recordDecision(harness, continuation);
   const message = harness.messages(SUMMARY_REQUEST_TYPE).at(-1);
@@ -521,6 +528,47 @@ describe("commands and menu", () => {
     );
   });
 
+  it("accepts a leading continuation flag before extra context", async () => {
+    const run = createHarness();
+    await beginPreparation(run, "preserve context", "stop");
+    expect(run.messages(PREPARATION_REQUEST_TYPE)[0].content).toContain(
+      "The user explicitly selected --stop",
+    );
+    expect(run.messages(PREPARATION_REQUEST_TYPE)[0].content).toContain(
+      "preserve context",
+    );
+
+    const force = createHarness();
+    await force
+      .command()
+      .handler("force --continue preserve context", force.ctx);
+    expect(force.messages(DECISION_REQUEST_TYPE)[0].content).toContain(
+      "The user explicitly selected --continue",
+    );
+    await beginDecision(force);
+    await recordDecision(force, "continue");
+    expect(force.messages(SUMMARY_REQUEST_TYPE)[0].content).toContain(
+      "preserve context",
+    );
+  });
+
+  it("rejects conflicting or unknown leading continuation flags", async () => {
+    const harness = createHarness();
+    for (const command of [
+      "run --stop --continue",
+      "force --continue --stop context",
+      "run --unknown context",
+      "force --unknown context",
+    ]) {
+      await harness.command().handler(command, harness.ctx);
+    }
+    expect(harness.pi.sendMessage).not.toHaveBeenCalled();
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Usage: /supercompact [run [--stop|--continue] [extra context] | force [--stop|--continue] [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]",
+      "error",
+    );
+  });
+
   it("6. completion exposes every supported positional command", () => {
     const harness = createHarness();
     expect(harness.command().getArgumentCompletions("")).toEqual(
@@ -539,6 +587,13 @@ describe("commands and menu", () => {
         label: value,
       })),
     );
+    expect(harness.command().getArgumentCompletions("run --")).toEqual([
+      { value: "--stop", label: "--stop" },
+      { value: "--continue", label: "--continue" },
+    ]);
+    expect(harness.command().getArgumentCompletions("force --s")).toEqual([
+      { value: "--stop", label: "--stop" },
+    ]);
   });
 
   it("7. removed, malformed, and legacy commands report the new usage without changing state", async () => {
@@ -563,7 +618,7 @@ describe("commands and menu", () => {
     }
     expect(harness.pi.sendMessage).not.toHaveBeenCalled();
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
-      "Usage: /supercompact [run [extra context] | force [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]",
+      "Usage: /supercompact [run [--stop|--continue] [extra context] | force [--stop|--continue] [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]",
       "error",
     );
   });
@@ -1464,6 +1519,58 @@ describe("preparation", () => {
     expect(message.content.match(/unique-context-marker/g)).toHaveLength(1);
   });
 
+  it.each(["stop", "continue"] as const)(
+    "enforces run --%s through the preparation tool",
+    async (continuation) => {
+      const harness = createHarness();
+      await beginPreparation(harness, "", continuation);
+      await expect(
+        confirmPreparation(harness, {
+          continuation: continuation === "stop" ? "continue" : "stop",
+        }),
+      ).rejects.toThrow(`explicit --${continuation} flag`);
+      await expect(
+        confirmPreparation(harness, { continuation }),
+      ).resolves.toMatchObject({ details: { status: "queued" } });
+    },
+  );
+
+  it("does not let force replace flagged preparation without abort", async () => {
+    const harness = createHarness();
+    await beginPreparation(harness, "", "stop");
+    await harness.command().handler("force", harness.ctx);
+    expect(harness.messages(DECISION_REQUEST_TYPE)).toHaveLength(0);
+    expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("flagged preparation is active"),
+      "warning",
+    );
+  });
+
+  it("clears a run flag after the workflow completes", async () => {
+    const harness = createHarness();
+    await beginPreparedSummary(harness, {
+      params: { continuation: "stop" },
+      continuationOverride: "stop",
+    });
+    await compactSuccessfully(harness, "stop");
+
+    await beginPreparation(harness);
+    expect(
+      harness.messages(PREPARATION_REQUEST_TYPE).at(-1).content,
+    ).not.toContain("explicitly selected --stop");
+  });
+
+  it("clears a run flag when aborted", async () => {
+    const harness = createHarness();
+    await beginPreparation(harness, "", "continue");
+    await harness.command().handler("abort", harness.ctx);
+
+    await beginPreparation(harness);
+    expect(
+      harness.messages(PREPARATION_REQUEST_TYPE).at(-1).content,
+    ).not.toContain("explicitly selected --continue");
+  });
+
   it("21. a second run is rejected while preparation is pending", async () => {
     const harness = createHarness();
     await beginPreparation(harness);
@@ -1745,6 +1852,47 @@ describe("force path", () => {
     });
     harness.handlers.get("agent_settled")?.({}, harness.ctx);
     expect(harness.ctx.compact).toHaveBeenCalledOnce();
+  });
+
+  it.each(["stop", "continue"] as const)(
+    "enforces force --%s through the decision tool",
+    async (continuation) => {
+      const harness = createHarness();
+      await harness.command().handler(`force --${continuation}`, harness.ctx);
+      const decision = await beginDecision(harness);
+      expect(decision.content).toContain(
+        `The user explicitly selected --${continuation}`,
+      );
+      await expect(
+        recordDecision(harness, continuation === "stop" ? "continue" : "stop"),
+      ).rejects.toThrow(`explicit --${continuation} flag`);
+      await expect(
+        recordDecision(harness, continuation),
+      ).resolves.toBeDefined();
+      expect(harness.messages(SUMMARY_REQUEST_TYPE)).toHaveLength(1);
+    },
+  );
+
+  it("clears a force flag after the workflow completes", async () => {
+    const harness = createHarness();
+    await beginForceSummary(harness, "", "stop", "stop");
+    await compactSuccessfully(harness, "stop");
+
+    await harness.command().handler("force", harness.ctx);
+    expect(
+      harness.messages(DECISION_REQUEST_TYPE).at(-1).content,
+    ).not.toContain("explicitly selected --stop");
+  });
+
+  it("clears a force flag when aborted", async () => {
+    const harness = createHarness();
+    await harness.command().handler("force --continue", harness.ctx);
+    await harness.command().handler("abort", harness.ctx);
+
+    await harness.command().handler("force", harness.ctx);
+    expect(
+      harness.messages(DECISION_REQUEST_TYPE).at(-1).content,
+    ).not.toContain("explicitly selected --continue");
   });
 
   it("38. force remains usable while agent requests are denied", async () => {

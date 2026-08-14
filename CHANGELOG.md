@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add authoritative `--stop` and `--continue` flags to explicit `/supercompact run` and `/supercompact force` commands; the selected continuation cannot be changed by the agent and is cleared with the workflow.
 - Treat Escape-aborted preparation, decision, and canonical-summary turns as terminal cancellation instead of automatically starting the same correction turn; provider errors and truncation remain bounded and recoverable.
 - Avoid duplicating active decision and summary progress notifications alongside Pi's working indicator; queued work and explicit extra context remain visible.
 - Ignore unexpected internal decision calls silently outside the dedicated decision phase, preventing normal prompts from entering corrective retry loops.

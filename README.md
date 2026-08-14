@@ -37,8 +37,8 @@ pi -e ./src/index.ts
 
 ```text
 /supercompact
-/supercompact run [extra context]
-/supercompact force [extra context]
+/supercompact run [--stop|--continue] [extra context]
+/supercompact force [--stop|--continue] [extra context]
 /supercompact agent-driven-allow
 /supercompact agent-driven-allow-noconfirm
 /supercompact agent-driven-allow-noconfirm-once
@@ -50,7 +50,7 @@ pi -e ./src/index.ts
 
 `/supercompact` opens a menu with preparation, force, automatic-supercompact controls, agent-driven permission controls, and abort. Preparation and force open a multiline editor for optional context.
 
-Automatic controls affect only percentage-triggered work. Agent-driven controls grant permission for the public tool to request compaction. Neither control grants the other.
+Automatic controls affect only percentage-triggered work. Agent-driven controls grant permission for the public tool to request compaction. Continuation flags apply only to explicit textual `run` and `force` commands; automatic and agent-driven workflows keep their existing continuation safeguards. Neither control grants the other.
 
 ### Automatic supercompact
 
@@ -69,7 +69,8 @@ Use `/supercompact auto-enable` or `/supercompact auto-disable` to override the 
 
 ```text
 /supercompact run
-/supercompact run preserve the accepted boundaries and continue implementation
+/supercompact run --stop preserve the accepted boundaries
+/supercompact run --continue preserve the accepted boundaries and continue implementation
 ```
 
 `run` does not compact immediately. It:
@@ -83,16 +84,19 @@ Use `/supercompact auto-enable` or `/supercompact auto-disable` to override the 
 
 The checkpoint follows the active session's scope and rules. It does not assume that every session has a repository, files to edit, validation to run, or changes to commit.
 
+`--stop` and `--continue` are optional authoritative continuation flags. They must appear immediately after `run`; the selected value is carried through preparation and cannot be changed by the agent. A conflicting or unknown leading option is rejected. Use `/supercompact abort` to cancel a flagged preparation before it is consumed.
+
 If user input is required, the agent asks and waits. The one-off authorization remains pending across turns until it is used, canceled, denied, or replaced by session lifecycle activity.
 
 ### Force immediately
 
 ```text
 /supercompact force
-/supercompact force stop after compaction
+/supercompact force --stop
+/supercompact force --continue preserve the active objective
 ```
 
-`force` immediately starts the continuation-decision, canonical-summary, and native-compaction workflow. It bypasses preparation and final confirmation because the command itself is explicit user authorization. It remains available when agent-driven requests are denied.
+`force` immediately starts the continuation-decision, canonical-summary, and native-compaction workflow. It bypasses preparation and final confirmation because the command itself is explicit user authorization. It remains available when agent-driven requests are denied. An explicit `--stop` or `--continue` must appear immediately after `force`; the selected value is authoritative and the dedicated decision turn must record that exact value. Use `/supercompact abort` to cancel a flagged force workflow before native compaction.
 
 ### Allow one agent-driven request without confirmation
 
@@ -213,11 +217,13 @@ The hidden preparation prompt asks the agent to:
 
 The confirmation dialog whitespace-normalizes agent-created values — the next action and additional summary context — and limits them to the first 10 words plus `…` when longer. Major blocks are separated by one blank line. The complete values remain unchanged in workflow state, the canonical summary prompt, restored context, and continuation metadata, and user-supplied run context always travels in full through the same paths even though it never appears in a dialog.
 
-When confirmation is required, the extension locks it before opening the dialog and rechecks authorization afterward. Configured or live-session no-confirm permission opens no dialog and begins the same guarded canonical-summary path directly; an explicit `run` or `force` also opens no dialog because the command is the authorization. A confirmed or explicitly authorized `stop` is a hard constraint. A `continue` choice is permission, not a mandate: the dedicated decision phase may conservatively choose `stop` when work is complete, blocked, awaiting input, or uncertain.
+When confirmation is required, the extension locks it before opening the dialog and rechecks authorization afterward. Configured or live-session no-confirm permission opens no dialog and begins the same guarded canonical-summary path directly; an explicit `run` or `force` also opens no dialog because the command is the authorization. A confirmed or explicitly authorized `stop` is a hard constraint. Without an explicit command flag, a `continue` choice is permission, not a mandate: the dedicated decision phase may conservatively choose `stop` when work is complete, blocked, awaiting input, or uncertain. Explicit `--stop` and `--continue` flags are authoritative user choices and cannot be changed by the agent; `/supercompact abort` is the pre-compaction cancellation path.
 
 ### Canonical summary workflow
 
 For an unprepared `force` request, the extension:
+
+An explicit `--stop` or `--continue` flag does not remove the dedicated decision turn. It constrains that turn to record the selected value, while unflagged requests retain conservative agent-selected continuation.
 
 1. Queues a short, dedicated continuation-decision turn.
 2. Records a schema-validated `continue` or `stop` decision through the internal tool, with no other tool calls allowed.

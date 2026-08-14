@@ -27,9 +27,38 @@ const MAX_WORKFLOW_ATTEMPTS = 3;
 const DEFAULT_THRESHOLD_PERCENT = 80;
 const DEFAULT_FORCE_THRESHOLD_PERCENT = 90;
 const USAGE =
-  "Usage: /supercompact [run [extra context] | force [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]";
+  "Usage: /supercompact [run [--stop|--continue] [extra context] | force [--stop|--continue] [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]";
 
 export type ContinuationAction = "continue" | "stop";
+
+interface ParsedCommandArguments {
+  continuationOverride?: ContinuationAction;
+  extraContext: string;
+}
+
+function parseCommandArguments(
+  remainder: string,
+): ParsedCommandArguments | undefined {
+  let extraContext = remainder.trim();
+  let continuationOverride: ContinuationAction | undefined;
+
+  while (extraContext.startsWith("--")) {
+    const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(extraContext);
+    const option = match?.[1];
+    if (option !== "--stop" && option !== "--continue") return undefined;
+    if (continuationOverride) return undefined;
+    continuationOverride = option.slice(2) as ContinuationAction;
+    extraContext = match?.[2]?.trim() ?? "";
+  }
+
+  return { continuationOverride, extraContext };
+}
+
+function explicitContinuationError(continuation: ContinuationAction): Error {
+  return new Error(
+    `The explicit --${continuation} flag requires continuation set to ${continuation}. Correct the decision to ${continuation}; do not override the user's command.`,
+  );
+}
 
 export interface ParsedSuperSummary {
   action: ContinuationAction;
@@ -85,6 +114,7 @@ interface PreparationGrant {
   origin: PreparationOrigin;
   consumed: boolean;
   revoked: boolean;
+  continuationOverride?: ContinuationAction;
 }
 
 interface OneShotNoConfirmGrant {
@@ -100,6 +130,7 @@ interface SupercompactRequest {
   extraContext: string;
   automaticForce: boolean;
   preparation?: ConfirmedPreparationContext;
+  continuationOverride?: ContinuationAction;
   action?: ContinuationAction;
   summary?: string;
 }
@@ -412,6 +443,7 @@ function staticComponent(lines: string[]) {
 export function buildPreparationPrompt(
   extraContext: string,
   automatic = false,
+  continuationOverride?: ContinuationAction,
 ): string {
   const emphasis = extraContext.trim()
     ? [
@@ -437,6 +469,12 @@ export function buildPreparationPrompt(
     "Do not broaden the task, invent work, or turn this checkpoint into a broad audit or ceremonial report.",
     "",
     emphasis,
+    ...(continuationOverride
+      ? [
+          "",
+          `The user explicitly selected --${continuationOverride} for this run command. The continuation value is fixed and must not be changed by the agent. Call ${AGENT_TOOL_NAME} with continuation set to ${continuationOverride}.`,
+        ]
+      : []),
     "",
     "Refresh relevant context:",
     "- Re-read applicable plans, instructions, user-facing documentation, and directly referenced durable sources.",
@@ -465,6 +503,7 @@ export function buildPreparationPrompt(
 export function buildDecisionPrompt(
   preparation?: ConfirmedPreparationContext,
   automaticForce = false,
+  continuationOverride?: ContinuationAction,
 ): string {
   const preparationGuidance = preparation
     ? [
@@ -489,8 +528,13 @@ export function buildDecisionPrompt(
       : "Record the continuation decision for supercompaction before generating the canonical handoff.",
     "Use the current conversation and established authorization boundaries. Do not invent, broaden, or continue optional work.",
     preparationGuidance,
+    ...(continuationOverride
+      ? [
+          `The user explicitly selected --${continuationOverride} for this force command. The continuation value is fixed and must not be changed by the agent. Call ${DECISION_TOOL_NAME} with continuation set to ${continuationOverride}.`,
+        ]
+      : []),
     "This is a decision-only turn. Do not write prose, call any other tool, or perform any other work.",
-    `Call ${DECISION_TOOL_NAME} exactly once with continuation set to continue or stop.`,
+    `Call ${DECISION_TOOL_NAME} exactly once with continuation set to ${continuationOverride ?? "continue or stop"}.`,
   ].join("\n\n");
 }
 
@@ -995,6 +1039,12 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         );
       }
       if (
+        request.continuationOverride &&
+        params.continuation !== request.continuationOverride
+      ) {
+        throw explicitContinuationError(request.continuationOverride);
+      }
+      if (
         request.preparation?.expectedContinuation === "stop" &&
         params.continuation === "continue"
       ) {
@@ -1004,6 +1054,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       }
 
       request.action = params.continuation;
+      request.continuationOverride = undefined;
       request.phase = "decision-ready";
       request.attempts = 0;
       clearDecisionState(ctx);
@@ -1052,6 +1103,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     preparation: ConfirmedPreparationContext | undefined,
     ctx: ExtensionContext,
     automaticForce = false,
+    continuationOverride?: ContinuationAction,
   ): { started: true } | { started: false; reason: string } => {
     if (request) {
       return {
@@ -1080,6 +1132,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       extraContext: extraContext.trim(),
       automaticForce,
       preparation,
+      ...(continuationOverride ? { continuationOverride } : {}),
       ...(prepared ? { action: preparation.expectedContinuation } : {}),
     };
 
@@ -1113,7 +1166,11 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
             }
           : {
               customType: DECISION_REQUEST_TYPE,
-              content: buildDecisionPrompt(preparation, automaticForce),
+              content: buildDecisionPrompt(
+                preparation,
+                automaticForce,
+                continuationOverride,
+              ),
               display: false,
               details: { version: 4, requestId: id },
             },
@@ -1177,6 +1234,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     }
 
     request.phase = "compacting";
+    request.continuationOverride = undefined;
     setWorkingMessage(ctx);
     const outcomeMessage =
       request.action === "continue"
@@ -1356,6 +1414,16 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       }
       const grantId = authorization.grantId;
       const oneShotGrantId = authorization.oneShotGrantId;
+      const grantContinuationOverride =
+        grantId && preparationGrant?.id === grantId
+          ? preparationGrant.continuationOverride
+          : undefined;
+      if (
+        grantContinuationOverride &&
+        params.continuation !== grantContinuationOverride
+      ) {
+        throw explicitContinuationError(grantContinuationOverride);
+      }
       const preparation: ConfirmedPreparationContext = {
         ...(authorization.noConfirmAuthorization
           ? { authorization: authorization.noConfirmAuthorization }
@@ -1393,6 +1461,9 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
           throw new Error(result.reason);
         }
 
+        if (grantId && preparationGrant?.id === grantId) {
+          preparationGrant.continuationOverride = undefined;
+        }
         if (oneShotGrantId && oneShotNoConfirmGrant?.id === oneShotGrantId) {
           oneShotNoConfirmGrant = undefined;
           updateStatus(ctx);
@@ -1969,7 +2040,9 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
           pi.sendMessage(
             {
               customType: DECISION_REQUEST_TYPE,
-              content: `Call ${DECISION_TOOL_NAME} exactly once now with continuation set to continue or stop. Emit no prose and call no other tool.`,
+              content: request.continuationOverride
+                ? `Call ${DECISION_TOOL_NAME} exactly once now with continuation set to ${request.continuationOverride}, as required by the explicit command flag. Emit no prose and call no other tool.`
+                : `Call ${DECISION_TOOL_NAME} exactly once now with continuation set to continue or stop. Emit no prose and call no other tool.`,
               display: false,
               details: { version: 4, requestId: request.id, correction: true },
             },
@@ -2041,6 +2114,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     extraContext: string,
     ctx: ExtensionContext,
     automatic = false,
+    continuationOverride?: ContinuationAction,
   ): void => {
     if (!automatic) supersedeOneShotNoConfirmGrant(ctx);
     if (request || confirmationId || preparationGrant) {
@@ -2066,6 +2140,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       origin: automatic ? "automatic" : "explicit",
       consumed: false,
       revoked: false,
+      ...(continuationOverride ? { continuationOverride } : {}),
     };
     updateStatus(ctx);
 
@@ -2087,7 +2162,11 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       pi.sendMessage(
         {
           customType: PREPARATION_REQUEST_TYPE,
-          content: buildPreparationPrompt(extraContext, automatic),
+          content: buildPreparationPrompt(
+            extraContext,
+            automatic,
+            continuationOverride,
+          ),
           display: false,
           details: { version: 1, preparationId: id },
         },
@@ -2110,6 +2189,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     extraContext: string,
     ctx: ExtensionContext,
     automatic = false,
+    continuationOverride?: ContinuationAction,
   ): void => {
     if (!automatic) supersedeOneShotNoConfirmGrant(ctx);
     if (confirmationId) {
@@ -2136,6 +2216,14 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     }
 
     if (preparationGrant && !preparationGrant.consumed) {
+      if (preparationGrant.continuationOverride) {
+        notify(
+          ctx,
+          "Cannot force supercompaction while flagged preparation is active; use /supercompact abort first.",
+          "warning",
+        );
+        return;
+      }
       if (!automatic || preparationGrant.origin === "automatic") {
         preparationGrant = undefined;
         updateStatus(ctx);
@@ -2155,6 +2243,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       undefined,
       ctx,
       automatic,
+      continuationOverride,
     );
     if (result.started) return;
     notify(
@@ -2406,6 +2495,16 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     description:
       "Prepare, force, abort, or manage automatic and agent-driven controls",
     getArgumentCompletions: (prefix) => {
+      const flagMatch = /^(?:run|force)\s+(--\S*)$/.exec(prefix);
+      if (flagMatch) {
+        const flags = ["--stop", "--continue"].filter((flag) =>
+          flag.startsWith(flagMatch[1]),
+        );
+        return flags.length === 0
+          ? null
+          : flags.map((flag) => ({ value: flag, label: flag }));
+      }
+
       const commands = [
         "run",
         "force",
@@ -2433,10 +2532,27 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       const action = match?.[1]?.toLowerCase();
       const remainder = match?.[2]?.trim() ?? "";
 
-      if (action === "run") {
-        startPreparation(remainder, ctx);
-      } else if (action === "force") {
-        startForce(remainder, ctx);
+      if (action === "run" || action === "force") {
+        const parsed = parseCommandArguments(remainder);
+        if (!parsed) {
+          notify(ctx, USAGE, "error");
+          return;
+        }
+        if (action === "run") {
+          startPreparation(
+            parsed.extraContext,
+            ctx,
+            false,
+            parsed.continuationOverride,
+          );
+        } else {
+          startForce(
+            parsed.extraContext,
+            ctx,
+            false,
+            parsed.continuationOverride,
+          );
+        }
       } else if (action === "auto-enable" && !remainder) {
         setAutomaticMode(true, ctx);
       } else if (action === "auto-disable" && !remainder) {
