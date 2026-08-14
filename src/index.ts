@@ -1884,6 +1884,8 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     }
 
     if (
+      (request.phase === "queued-summary" ||
+        request.phase === "awaiting-summary") &&
       event.message.role === "custom" &&
       event.message.customType === SUMMARY_REQUEST_TYPE &&
       requestIdFromDetails(event.message.details) === request.id

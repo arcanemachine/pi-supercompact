@@ -2245,6 +2245,21 @@ describe("preserved workflow regressions", () => {
     expect(harness.ctx.compact).toHaveBeenCalledOnce();
   });
 
+  it("ignores a delayed summary request after compaction starts", async () => {
+    const harness = createHarness();
+    const summaryRequest = await beginForceSummary(harness);
+    await recordSummaryDecision(harness, "stop");
+    harness.handlers.get("agent_settled")?.({}, harness.ctx);
+
+    harness.handlers.get("message_end")?.(
+      customMessage(summaryRequest),
+      harness.ctx,
+    );
+
+    expect(harness.ctx.ui.setWorkingMessage).toHaveBeenLastCalledWith();
+    expect(harness.ctx.compact).toHaveBeenCalledOnce();
+  });
+
   it("restores the exact visible summary and continues after compaction", async () => {
     const harness = createHarness();
     await beginForceSummary(harness, "", "continue");
