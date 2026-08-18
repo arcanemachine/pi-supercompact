@@ -8,6 +8,8 @@ A [Pi](https://pi.dev) extension for deliberate, loss-resistant context compacti
 
 It provides a focused pre-compaction checkpoint, configurable final confirmation for agent-driven requests, optional automatic supercompaction, one-shot and live-session no-confirm permission, a canonical full-context handoff, Pi native compaction, invisible handoff restoration, and conservative continuation of authorized work. An explicit `run` or `force` is itself the user authorization and never opens the final confirmation dialog; the dialog guards only agent-driven requests.
 
+> Like this extension? See [my other Pi extensions](https://github.com/arcanemachine/pi-projects).
+
 ## Requirements
 
 - Pi 0.80.10 or later

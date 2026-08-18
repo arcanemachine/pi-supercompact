@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+
+- Document the parent Pi extensions project.
+
 ## Unreleased
 
 - Show explicit continuation overrides alongside run and force progress notifications.
