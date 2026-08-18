@@ -1059,7 +1059,7 @@ describe("session-only no-confirm permission", () => {
       "supercompact: agent-driven-allow-noconfirm 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
-      "Supercompaction is proceeding under live-session no-confirm permission. No additional approval is required.",
+      "Supercompaction is proceeding under live-session no-confirm permission.",
       "info",
     );
     expect(harness.activeTools()).toEqual(initialTools);

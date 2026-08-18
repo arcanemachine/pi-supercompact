@@ -1494,7 +1494,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         );
         notify(
           ctx,
-          `Supercompaction is proceeding under ${noConfirmAuthorizationLabel(authorization.noConfirmAuthorization!)}. No additional approval is required.`,
+          `Supercompaction is proceeding under ${noConfirmAuthorizationLabel(authorization.noConfirmAuthorization!)}.`,
         );
         return {
           content: [
