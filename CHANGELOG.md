@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.3
+
+- Use smaller logo.
+
 ## 0.3.2
 
 - Document the parent Pi extensions project.

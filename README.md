@@ -1,7 +1,7 @@
 # pi-supercompact
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/arcanemachine/pi-supercompact/main/logo.png" alt="pi-supercompact logo" width="250" />
+  <img src="https://raw.githubusercontent.com/arcanemachine/pi-supercompact/main/logo.jpg" alt="pi-supercompact logo" width="250" />
 </p>
 
 A [Pi](https://pi.dev) extension for deliberate, loss-resistant context compaction.

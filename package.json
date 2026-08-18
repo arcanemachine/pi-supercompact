@@ -1,6 +1,6 @@
 {
   "name": "@arcanemachine/pi-supercompact",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Power-user supercompaction workflow for Pi",
   "type": "module",
   "keywords": [
@@ -15,7 +15,7 @@
     "extensions": [
       "./src/index.ts"
     ],
-    "image": "https://raw.githubusercontent.com/arcanemachine/pi-supercompact/main/logo.png"
+    "image": "https://raw.githubusercontent.com/arcanemachine/pi-supercompact/main/logo.jpg"
   },
   "scripts": {
     "build": "tsc",
