@@ -1970,7 +1970,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       requestIdFromDetails(event.message.details) === request.id
     ) {
       request.phase = "awaiting-decision";
-      setWorkingMessage(ctx, "Recording continuation decision…");
+      setWorkingMessage(ctx, "Beginning supercompaction...");
       return;
     }
 
