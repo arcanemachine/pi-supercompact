@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+## 0.3.4 - 2026-08-24
+
+- Condense supercompact tool descriptions and parameters while preserving authorization and preparation guidance.
+
 ## 0.3.3
 
 - Use smaller logo.
@@ -7,8 +13,6 @@
 ## 0.3.2
 
 - Document the parent Pi extensions project.
-
-## Unreleased
 
 - Show explicit continuation overrides alongside run and force progress notifications.
 - Add descriptive command and continuation-flag autocomplete help for `/supercompact` actions.
