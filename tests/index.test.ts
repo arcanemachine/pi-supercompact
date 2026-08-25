@@ -1059,7 +1059,7 @@ describe("session-only no-confirm permission", () => {
       "supercompact: agent-driven-allow-noconfirm 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
-      "Supercompaction is proceeding under live-session no-confirm permission.",
+      "Supercompaction is proceeding: live-session no-confirm permission.",
       "info",
     );
     expect(harness.activeTools()).toEqual(initialTools);
@@ -2928,10 +2928,8 @@ describe("summary helper contracts", () => {
     expect(preparation).toContain("one exact immediate next action");
     expect(summary).toContain("Relevant resources by work horizon");
     expect(summary).toContain("include exact file paths when files materially");
-    expect(descriptions).toContain("availability does not imply authorization");
-    expect(descriptions).toContain(
-      "Availability alone is never an instruction",
-    );
+    expect(descriptions).toContain("Availability is not authorization");
+    expect(descriptions).toContain("call only when requested");
   });
 });
 

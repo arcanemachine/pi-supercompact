@@ -185,17 +185,16 @@ const AgentToolParameters = Type.Object(
       type: "string",
       enum: ["continue", "stop"],
       description:
-        "Whether authorized incomplete work should continue after compaction or the agent should wait for the user.",
+        "Continue authorized unfinished work after compaction, or wait for the user.",
     }),
     nextAction: Type.String({
       minLength: 1,
       description:
-        "One concrete immediate action after compaction, or an explicit statement that the agent will wait for the user.",
+        "Exact next action after compaction, or state that you will wait.",
     }),
     extraContext: Type.Optional(
       Type.String({
-        description:
-          "Optional additional emphasis for the canonical super-summary.",
+        description: "Optional emphasis for the super-summary.",
       }),
     ),
   },
@@ -208,7 +207,7 @@ const DecisionParameters = Type.Object(
       type: "string",
       enum: ["continue", "stop"],
       description:
-        "Whether the agent should continue authorized incomplete work after compaction or wait for the user.",
+        "Continue authorized unfinished work after compaction, or wait for the user.",
     }),
   },
   { additionalProperties: false },
@@ -1030,7 +1029,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     name: DECISION_TOOL_NAME,
     label: "Supercompact Decision",
     description:
-      "Internal workflow state marker used only during a dedicated continuation-decision turn. Availability alone is never an instruction to call it. Calls outside that turn are ignored silently.",
+      "Internal continuation marker for the dedicated decision turn; call only when requested, otherwise ignored.",
     parameters: DecisionParameters,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       if (request?.phase !== "awaiting-decision") {
@@ -1395,7 +1394,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     name: AGENT_TOOL_NAME,
     label: "Supercompact",
     description:
-      "Always-visible interface for requesting supercompaction; availability does not imply authorization and never grants its own authority. Complete the focused preparation checks first: refresh relevant durable context, close authorized work when safe, surface blockers or missing input, verify or persist work when applicable, choose continue or stop, and identify one exact next action. An explicit /supercompact run is itself the authorization and, like /supercompact force, opens no confirmation dialog; the final dialog applies only to agent-driven requests that lack no-confirm permission. Call after a hidden /supercompact run preparation request, or when the conversation makes supercompaction appropriate and agent-driven permission may exist. The execution result explains whether authorization is absent, confirmation is required, or no-confirm permission queued the workflow. Do not repeatedly retry a denied, declined, revoked, busy, unavailable, or confirmation-required headless request.",
+      "Request supercompaction after preparation: refresh durable context, finish or preserve authorized work, surface blockers, choose continue or stop, and give one exact next action. Availability is not authorization. Call after /supercompact preparation or when agent-driven permission may exist; explicit /supercompact runs need no confirmation, while agent-driven requests may. Do not retry denied, declined, revoked, busy, unavailable, or confirmation-required headless requests.",
     parameters: AgentToolParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
