@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-08-27
+
+- Add `-s` and `-c` shorthands for the `--stop` and `--continue` continuation flags on `/supercompact run` and `/supercompact force`; malformed single-dash tokens are now rejected with the usage message.
+- Fix continuation-flag autocomplete replacing the entire argument line: `/supercompact run --con<Tab>` produced `/supercompact --continue`; completion values now include the subcommand.
+
 ## 0.3.4 - 2026-08-24
 
 - Condense supercompact tool descriptions and parameters while preserving authorization and preparation guidance.
