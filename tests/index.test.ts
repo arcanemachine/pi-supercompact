@@ -570,6 +570,23 @@ describe("commands and menu", () => {
       "Continuation override: --continue (continue authorized work after compaction).\nExtra instructions: preserve the active objective",
       "info",
     );
+    const shorthandStop = createHarness();
+    await shorthandStop
+      .command()
+      .handler("run -s do not do anything after compaction", shorthandStop.ctx);
+    expect(shorthandStop.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Pre-compaction wrap started.\nContinuation override: --stop (wait after compaction).\nExtra instructions: do not do anything after compaction",
+      "info",
+    );
+
+    const shorthandContinue = createHarness();
+    await shorthandContinue
+      .command()
+      .handler("force -c preserve the active objective", shorthandContinue.ctx);
+    expect(shorthandContinue.ctx.ui.notify).toHaveBeenLastCalledWith(
+      "Continuation override: --continue (continue authorized work after compaction).\nExtra instructions: preserve the active objective",
+      "info",
+    );
   });
 
   it("rejects conflicting or unknown leading continuation flags", async () => {
@@ -579,12 +596,14 @@ describe("commands and menu", () => {
       "force --continue --stop context",
       "run --unknown context",
       "force --unknown context",
+      "run -x context",
+      "force -s -c context",
     ]) {
       await harness.command().handler(command, harness.ctx);
     }
     expect(harness.pi.sendMessage).not.toHaveBeenCalled();
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
-      "Usage: /supercompact [run [--stop|--continue] [extra context] | force [--stop|--continue] [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]",
+      "Usage: /supercompact [run [--stop|-s|--continue|-c] [extra context] | force [--stop|-s|--continue|-c] [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]",
       "error",
     );
   });
@@ -634,21 +653,43 @@ describe("commands and menu", () => {
     );
     expect(harness.command().getArgumentCompletions("run --")).toEqual([
       {
-        value: "--stop",
+        value: "run --stop",
         label: "--stop",
         description: "First option; override continuation to stop",
       },
       {
-        value: "--continue",
+        value: "run --continue",
         label: "--continue",
         description: "First option; override continuation to continue",
       },
     ]);
     expect(harness.command().getArgumentCompletions("force --s")).toEqual([
       {
-        value: "--stop",
+        value: "force --stop",
         label: "--stop",
         description: "First option; override continuation to stop",
+      },
+    ]);
+    expect(harness.command().getArgumentCompletions("force -")).toEqual([
+      {
+        value: "force --stop",
+        label: "--stop",
+        description: "First option; override continuation to stop",
+      },
+      {
+        value: "force -s",
+        label: "-s",
+        description: "Shorthand for --stop",
+      },
+      {
+        value: "force --continue",
+        label: "--continue",
+        description: "First option; override continuation to continue",
+      },
+      {
+        value: "force -c",
+        label: "-c",
+        description: "Shorthand for --continue",
       },
     ]);
   });
@@ -675,7 +716,7 @@ describe("commands and menu", () => {
     }
     expect(harness.pi.sendMessage).not.toHaveBeenCalled();
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
-      "Usage: /supercompact [run [--stop|--continue] [extra context] | force [--stop|--continue] [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]",
+      "Usage: /supercompact [run [--stop|-s|--continue|-c] [extra context] | force [--stop|-s|--continue|-c] [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]",
       "error",
     );
   });

@@ -27,7 +27,14 @@ const MAX_WORKFLOW_ATTEMPTS = 3;
 const DEFAULT_THRESHOLD_PERCENT = 80;
 const DEFAULT_FORCE_THRESHOLD_PERCENT = 90;
 const USAGE =
-  "Usage: /supercompact [run [--stop|--continue] [extra context] | force [--stop|--continue] [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]";
+  "Usage: /supercompact [run [--stop|-s|--continue|-c] [extra context] | force [--stop|-s|--continue|-c] [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-noconfirm | agent-driven-allow-noconfirm-once | agent-driven-deny | abort]";
+
+const CONTINUATION_OPTIONS: Array<[string, ContinuationAction]> = [
+  ["--stop", "stop"],
+  ["-s", "stop"],
+  ["--continue", "continue"],
+  ["-c", "continue"],
+];
 
 export type ContinuationAction = "continue" | "stop";
 
@@ -42,12 +49,13 @@ function parseCommandArguments(
   let extraContext = remainder.trim();
   let continuationOverride: ContinuationAction | undefined;
 
-  while (extraContext.startsWith("--")) {
+  while (/^-{1,2}\S/.test(extraContext)) {
     const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(extraContext);
     const option = match?.[1];
-    if (option !== "--stop" && option !== "--continue") return undefined;
+    const action = CONTINUATION_OPTIONS.find(([flag]) => flag === option);
+    if (!action) return undefined;
     if (continuationOverride) return undefined;
-    continuationOverride = option.slice(2) as ContinuationAction;
+    continuationOverride = action[1];
     extraContext = match?.[2]?.trim() ?? "";
   }
 
@@ -2520,19 +2528,23 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     description:
       "Prepare, force, abort, or manage automatic and agent-driven controls",
     getArgumentCompletions: (prefix) => {
-      const flagMatch = /^(?:run|force)\s+(--\S*)$/.exec(prefix);
+      // The completion value replaces the full argument prefix, so it must
+      // include the subcommand, not just the flag token.
+      const flagMatch = /^(run|force)\s+(-{1,2}\S*)$/.exec(prefix);
       if (flagMatch) {
-        const flags = ["--stop", "--continue"].filter((flag) =>
-          flag.startsWith(flagMatch[1]),
+        const flags = ["--stop", "-s", "--continue", "-c"].filter((flag) =>
+          flag.startsWith(flagMatch[2]),
         );
         const descriptions: Record<string, string> = {
           "--stop": "First option; override continuation to stop",
+          "-s": "Shorthand for --stop",
           "--continue": "First option; override continuation to continue",
+          "-c": "Shorthand for --continue",
         };
         return flags.length === 0
           ? null
           : flags.map((flag) => ({
-              value: flag,
+              value: `${flagMatch[1]} ${flag}`,
               label: flag,
               description: descriptions[flag],
             }));

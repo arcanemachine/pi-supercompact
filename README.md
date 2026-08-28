@@ -39,8 +39,8 @@ pi -e ./src/index.ts
 
 ```text
 /supercompact
-/supercompact run [--stop|--continue] [extra context]
-/supercompact force [--stop|--continue] [extra context]
+/supercompact run [--stop|-s|--continue|-c] [extra context]
+/supercompact force [--stop|-s|--continue|-c] [extra context]
 /supercompact agent-driven-allow
 /supercompact agent-driven-allow-noconfirm
 /supercompact agent-driven-allow-noconfirm-once
@@ -72,7 +72,7 @@ Use `/supercompact auto-enable` or `/supercompact auto-disable` to override the 
 ```text
 /supercompact run
 /supercompact run --stop preserve the accepted boundaries
-/supercompact run --continue preserve the accepted boundaries and continue implementation
+/supercompact run -c preserve the accepted boundaries and continue implementation
 ```
 
 `run` does not compact immediately. It:
@@ -86,7 +86,7 @@ Use `/supercompact auto-enable` or `/supercompact auto-disable` to override the 
 
 The checkpoint follows the active session's scope and rules. It does not assume that every session has a repository, files to edit, validation to run, or changes to commit.
 
-`--stop` and `--continue` are optional authoritative continuation flags. They must appear immediately after `run`; the selected value is carried through preparation and cannot be changed by the agent. A conflicting or unknown leading option is rejected. Use `/supercompact abort` to cancel a flagged preparation before it is consumed.
+`--stop` and `--continue` are optional authoritative continuation flags. The shorthands `-s` and `-c` are equivalent. They must appear immediately after `run`; the selected value is carried through preparation and cannot be changed by the agent. A conflicting or unknown leading option is rejected. Use `/supercompact abort` to cancel a flagged preparation before it is consumed.
 
 If user input is required, the agent asks and waits. The one-off authorization remains pending across turns until it is used, canceled, denied, or replaced by session lifecycle activity.
 
@@ -98,7 +98,7 @@ If user input is required, the agent asks and waits. The one-off authorization r
 /supercompact force --continue preserve the active objective
 ```
 
-`force` immediately starts the continuation-decision, canonical-summary, and native-compaction workflow. It bypasses preparation and final confirmation because the command itself is explicit user authorization. It remains available when agent-driven requests are denied. An explicit `--stop` or `--continue` must appear immediately after `force`; the selected value is authoritative and the dedicated decision turn must record that exact value. Use `/supercompact abort` to cancel a flagged force workflow before native compaction.
+`force` immediately starts the continuation-decision, canonical-summary, and native-compaction workflow. It bypasses preparation and final confirmation because the command itself is explicit user authorization. It remains available when agent-driven requests are denied. An explicit `--stop`, `-s`, `--continue`, or `-c` must appear immediately after `force`; the selected value is authoritative and the dedicated decision turn must record that exact value. Use `/supercompact abort` to cancel a flagged force workflow before native compaction.
 
 ### Allow one agent-driven request without confirmation
 
