@@ -2362,7 +2362,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     updateStatus(ctx);
     notifyPermission(
       ctx,
-      "One-shot no-confirm permission is armed for the next valid agent-driven supercompaction request. It will be consumed when canonical-summary work is successfully queued.",
+      "One-shot no-confirm permission is armed for the next valid agent-driven supercompaction request.",
     );
   };
 
