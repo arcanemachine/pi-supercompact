@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.1 - 2026-09-03
+
 - Consolidate persistent configuration into the `pi-supercompact` namespace in
   Pi's global or trusted-project `settings.json`; standalone
   `pi-supercompact.json` files are no longer read.
