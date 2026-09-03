@@ -2997,7 +2997,7 @@ describe("stable-schema runtime gates", () => {
 
 describe("automatic supercompact", () => {
   const automaticConfig = JSON.stringify({
-    Supercompact: {
+    supercompact: {
       enabled: true,
       thresholdPercent: 80,
       forceThresholdPercent: 90,
