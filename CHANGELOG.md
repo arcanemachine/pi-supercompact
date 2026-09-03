@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Simplify agent-driven permission commands: `/supercompact agent-driven-allow` now grants dialog-free permission for the live session, `/supercompact agent-driven-allow-once` grants it for one request, and the longer `agent-driven-allow-noconfirm` command names are removed.
+- Make the final confirmation dialog an explicit configuration opt-in through `agentRequestsRequireConfirmation` (default `false`) and remove the unused `requireConfirmation` setting.
+
 ## 0.4.0 - 2026-08-27
 
 - Add `-s` and `-c` shorthands for the `--stop` and `--continue` continuation flags on `/supercompact run` and `/supercompact force`; malformed single-dash tokens are now rejected with the usage message.

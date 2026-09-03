@@ -6,7 +6,7 @@
 
 A [Pi](https://pi.dev) extension for deliberate, loss-resistant context compaction.
 
-It provides a focused pre-compaction checkpoint, configurable final confirmation for agent-driven requests, optional automatic supercompaction, one-shot and live-session no-confirm permission, a canonical full-context handoff, Pi native compaction, invisible handoff restoration, and conservative continuation of authorized work. An explicit `run` or `force` is itself the user authorization and never opens the final confirmation dialog; the dialog guards only agent-driven requests.
+It provides a focused pre-compaction checkpoint, optional automatic supercompaction, configurable confirmation for agent-driven requests, one-shot and live-session agent-driven permission, a canonical full-context handoff, Pi native compaction, invisible handoff restoration, and conservative continuation of authorized work. An explicit `run` or `force` is itself the user authorization and never opens a confirmation dialog.
 
 > Like this extension? See [my other Pi extensions](https://github.com/arcanemachine/pi-projects).
 
@@ -42,15 +42,14 @@ pi -e ./src/index.ts
 /supercompact run [--stop|-s|--continue|-c] [extra context]
 /supercompact force [--stop|-s|--continue|-c] [extra context]
 /supercompact agent-driven-allow
-/supercompact agent-driven-allow-noconfirm
-/supercompact agent-driven-allow-noconfirm-once
+/supercompact agent-driven-allow-once
 /supercompact agent-driven-deny
 /supercompact abort
 /supercompact auto-enable
 /supercompact auto-disable
 ```
 
-`/supercompact` opens a menu with preparation, force, automatic-supercompact controls, agent-driven permission controls, and abort. Preparation and force open a multiline editor for optional context.
+`/supercompact` opens a menu with preparation, force, automatic-supercompact controls, agent-driven permission controls, and abort. Preparation and force open a multiline editor for optional context. The menu's permission choices are the same no-dialog allow, one-shot allow, and deny controls exposed by the command forms.
 
 Automatic controls affect only percentage-triggered work. Agent-driven controls grant permission for the public tool to request compaction. Continuation flags apply only to explicit textual `run` and `force` commands; automatic and agent-driven workflows keep their existing continuation safeguards. Neither control grants the other.
 
@@ -81,7 +80,7 @@ Use `/supercompact auto-enable` or `/supercompact auto-disable` to override the 
 2. Sends a hidden steering prompt for a focused refresh-and-close checkpoint.
 3. Lets the agent finish already-authorized work that needs no new input, refresh relevant durable context, and verify or persist work when applicable.
 4. Requires the agent to surface blockers or questions, choose whether work should continue, and name one exact next action.
-5. Treats the run command itself as explicit user authorization, exactly like `force`: no final confirmation dialog opens, even headlessly or while a live-session agent-driven permission mode is active.
+5. Treats the run command itself as explicit user authorization, exactly like `force`: no final confirmation dialog opens, even headlessly.
 6. Starts the dedicated continuation decision, canonical summary, and native compaction directly from that authorization.
 
 The checkpoint follows the active session's scope and rules. It does not assume that every session has a repository, files to edit, validation to run, or changes to commit.
@@ -100,19 +99,17 @@ If user input is required, the agent asks and waits. The one-off authorization r
 
 `force` immediately starts the continuation-decision, canonical-summary, and native-compaction workflow. It bypasses preparation and final confirmation because the command itself is explicit user authorization. It remains available when agent-driven requests are denied. An explicit `--stop`, `-s`, `--continue`, or `-c` must appear immediately after `force`; the selected value is authoritative and the dedicated decision turn must record that exact value. Use `/supercompact abort` to cancel a flagged force workflow before native compaction.
 
-### Allow one agent-driven request without confirmation
+### Allow one agent-driven request
 
 ```text
-/supercompact agent-driven-allow-noconfirm-once
+/supercompact agent-driven-allow-once
 ```
 
-`agent-driven-allow-noconfirm-once` arms the next valid agent-driven supercompaction without starting preparation or compaction itself. The user can then instruct the agent to complete the normal focused preparation and request supercompaction. The grant temporarily overlays denied or confirmation-required configured or live-session permission without changing it. While armed, the status is `supercompact: agent-driven-allow-noconfirm-once 🗜️ `.
+`agent-driven-allow-once` arms the next valid agent-driven supercompaction without starting preparation or compaction itself. The user can then instruct the agent to complete the normal focused preparation and request supercompaction. The grant temporarily overlays denied or confirmation-required configured permission without changing it, and the request proceeds without a confirmation dialog. While armed, the status is `supercompact: agent-driven-allow-once 🗜️ `.
 
 The grant is consumed only after a valid request successfully queues canonical-summary work. Invalid arguments, unavailable tools, or a synchronous queueing failure leave it armed; once work is queued, a later abort or failure does not re-arm it. Consumption automatically reveals the prior configured or live-session permission and status.
 
-If effective configured or `/supercompact agent-driven-allow-noconfirm` permission already bypasses confirmation, the command warns and does not arm a redundant grant. An explicit confirmation-required or denied session override can still be overlaid even when underlying configuration allows no-confirm requests.
-
-The grant is in-memory only. Reloading, replacing, resuming, forking, or shutting down the session clears it, as do `abort`, `agent-driven-deny`, `run`, `force`, `agent-driven-allow`, and `agent-driven-allow-noconfirm`. The command refuses to arm while a preparation, confirmation, summary, or compaction workflow is active.
+If effective configured or live-session permission already allows requests without a confirmation dialog, the command warns and does not arm a redundant grant. The grant is in-memory only. Reloading, replacing, resuming, forking, or shutting down the session clears it, as do `abort`, `agent-driven-deny`, `run`, `force`, and `agent-driven-allow`. The command refuses to arm while a preparation, confirmation, summary, or compaction workflow is active.
 
 ### Abort before native compaction
 
@@ -126,24 +123,18 @@ Pi does not expose native compaction cancellation to extensions. Once native com
 
 ### Live-session agent-driven permission
 
-- `/supercompact agent-driven-allow` permits agent-driven requests with final confirmation for the current live extension session.
-- `/supercompact agent-driven-allow-noconfirm` permits agent-driven requests without the final confirmation dialog for the current live extension session.
-- `/supercompact agent-driven-allow-noconfirm-once` temporarily permits one request without the dialog, then restores the effective configured or live-session mode.
-- `/supercompact agent-driven-deny` revokes either persistent session mode and cancels an unused preparation, one-shot grant, or open confirmation.
+- `/supercompact agent-driven-allow` permits agent-driven requests for the current live extension session without opening a confirmation dialog.
+- `/supercompact agent-driven-allow-once` temporarily permits one request without the dialog, then restores the effective configured or live-session mode.
+- `/supercompact agent-driven-deny` revokes live-session permission and cancels an unused preparation, one-shot grant, or open confirmation.
 
-`agent-driven-allow`, `agent-driven-allow-noconfirm`, and `agent-driven-deny` update session-local permission and never write configuration. These modes govern agent-driven calls only: a manual `run` or `force` is its own user authorization and never opens the confirmation dialog, regardless of the active mode. A context-excluded custom session entry restores that persistent override and its status across `/reload`; it does not enter model context. `agent-driven-allow-noconfirm-once` uses only transient in-memory state and is cleared by reload. Starting a new process, creating or resuming a session, or forking discards all runtime permission and reapplies configured denied, confirmation-required, or no-confirm permission.
-
-Confirmation-required permission lets an agent-driven request supercompaction but still requires final TUI or RPC confirmation. No-confirm permission is stronger authorization: an agent-driven request may queue the canonical summary and native compaction without another approval prompt. It skips only the dialog; preparation expectations, exact-next-action validation, concurrency and host-tool checks, summary validation, continuation constraints, bounded retries, compaction, filtering, restoration, and cleanup remain enforced.
-
-A declined, canceled, revoked, busy, denied, unavailable, or confirmation-required headless request tells the agent what must happen next and not to retry automatically.
+These commands update or arm session-local permission and never write configuration. They govern agent-driven calls only: a manual `run` or `force` is its own user authorization and never opens the confirmation dialog. A context-excluded custom session entry restores persistent live-session permission across `/reload`; it does not enter model context. One-shot permission uses only transient in-memory state and is cleared by reload. Starting a new process, creating or resuming a session, or forking discards runtime permission and reapplies configured denied or allowed permission.
 
 ## Configuration
 
-Persistent confirmation, request permission, and automatic supercompact use an extension-specific JSON file:
+Persistent request permission, optional confirmation, and automatic supercompact use an extension-specific JSON file:
 
 ```json
 {
-  "requireConfirmation": true,
   "agentRequestsAllowed": true,
   "agentRequestsRequireConfirmation": false,
   "supercompact": {
@@ -156,25 +147,24 @@ Persistent confirmation, request permission, and automatic supercompact use an e
 
 The global file is `~/.pi/agent/pi-supercompact.json`. A trusted project may override it with `<project>/.pi/pi-supercompact.json`; a recognized project configuration is one complete overriding policy rather than a property-by-property merge. Project configuration is ignored for untrusted projects.
 
-- `requireConfirmation` defaults to `true` and serves only as the fallback for `agentRequestsRequireConfirmation` when that property is omitted. It no longer affects prepared `run` requests: running the command is itself the authorization.
 - `agentRequestsAllowed` defaults to `false` and is the only property that grants persistent agent-driven permission.
-- `agentRequestsRequireConfirmation` governs config-authorized agent-driven requests. When omitted, it inherits `requireConfirmation`.
+- `agentRequestsRequireConfirmation` defaults to `false`. Set it to `true` to opt configured agent-driven requests into the final TUI or RPC confirmation dialog. It does not grant permission by itself.
+- `requireConfirmation` is no longer recognized or used.
 - `supercompact` is optional. It enables automatic supercompact only when `enabled` is `true`. Its thresholds default to 80 and 90 when omitted. They must be finite percentages above 0 and below 100, with `thresholdPercent` below `forceThresholdPercent`.
 
 For one Pi process, `--supercompact-auto` enables automatic supercompact and `--no-supercompact-auto` disables it. If both are supplied, the negative flag wins. Live `/supercompact auto-enable` or `/supercompact auto-disable` settings override flags; flags override trusted project or global configuration. These controls affect automatic triggering only, not the extension's tools or manual `/supercompact` commands.
 
-Prepared `run` never opens a confirmation dialog — the command is the authorization — so the table below covers config-authorized agent-driven requests only:
+Prepared `run` never opens a confirmation dialog—the command is the authorization. Config-authorized agent-driven requests follow this table:
 
-| `requireConfirmation` | `agentRequestsRequireConfirmation` | Config-authorized request |
-| --------------------- | ---------------------------------- | ------------------------- |
-| `true`                | omitted                            | Confirm                   |
-| `false`               | omitted                            | No confirm                |
-| `false`               | `true`                             | Confirm                   |
-| `true`                | `false`                            | No confirm                |
+| `agentRequestsAllowed` | `agentRequestsRequireConfirmation` | Config-authorized request |
+| ---------------------- | ---------------------------------- | ------------------------- |
+| `false`                | either                             | Denied                    |
+| `true`                 | omitted or `false`                 | No dialog                 |
+| `true`                 | `true`                             | Confirm                   |
 
-`/supercompact agent-driven-allow` and `/supercompact agent-driven-allow-noconfirm` explicitly override confirmation behavior for authorized agent-tool execution during the live session. `/supercompact agent-driven-allow-noconfirm-once` overlays either mode or configured policy for one successfully queued request without mutating it. `/supercompact agent-driven-deny` blocks unprepared requests but does not prevent the user from creating a later one-off `run` or no-confirm grant. `/supercompact force` always remains immediate and dialog-free, as does a prepared `run`.
+`/supercompact agent-driven-allow` explicitly overrides configured permission for the live session and proceeds without a dialog. `/supercompact agent-driven-allow-once` overlays configured or live-session permission for one successfully queued request without mutating it. `/supercompact agent-driven-deny` blocks unprepared requests but does not prevent the user from creating a later one-off `run` or one-shot permission. `/supercompact force` always remains immediate and dialog-free, as does a prepared `run`.
 
-Missing request permission remains denied. Confirmation properties never grant permission. A recognized property with a non-boolean value makes that configuration invalid; invalid configuration fails closed to denied agent-driven requests with confirmation required and warns when UI is available.
+A recognized property with a non-boolean value makes that configuration invalid; invalid configuration fails closed to denied agent-driven requests and warns when UI is available.
 
 ## Stable tools and authorization
 
@@ -183,9 +173,9 @@ The extension registers these tools once when it loads and keeps their schemas a
 - `supercompact` — the public request interface
 - `record_supercompact_decision` — internal canonical-summary workflow control
 
-Tool visibility does not grant authority. The public tool checks effective session permission, an unused `run` grant, or an armed one-shot no-confirm grant; workflow and confirmation state; internal-tool availability; exact-next-action validity; UI capability when the active mode requires it; and authorization again at the last applicable boundary. The internal tool accepts exactly one short call only during the dedicated continuation-decision phase, with no other tool calls, and all confirmed stop constraints intact. Incidental prose is tolerated. Calls outside that phase are ignored silently instead of generating corrective context. The following canonical-summary phase accepts only a non-empty ordinary Markdown handoff and no tool calls.
+Tool visibility does not grant authority. The public tool checks effective configured or live-session permission, an unused `run` grant, or an armed one-shot grant; workflow and confirmation state; internal-tool availability; exact-next-action validity; UI capability when configured confirmation is enabled; and authorization again at the last applicable boundary. The internal tool accepts exactly one short call only during the dedicated continuation-decision phase, with no other tool calls, and all confirmed stop constraints intact. Incidental prose is tolerated. Calls outside that phase are ignored silently instead of generating corrective context. The following canonical-summary phase accepts only a non-empty ordinary Markdown handoff and no tool calls.
 
-The extension never changes Pi's active tool selection to enforce permission. If the user or host excludes a required extension tool, the extension respects that choice. `force` fails before creating workflow state when the internal decision tool is unavailable. Prepared requests only require the public request tool because they carry their continuation outcome directly; the extension explains when a required tool must be re-enabled or the extension reloaded with its tools available. `agent-driven-allow`, `agent-driven-allow-noconfirm`, `agent-driven-allow-noconfirm-once`, and `agent-driven-deny` still update or arm session-local permission while reporting that execution remains unavailable. `abort` never changes the active tool selection.
+The extension never changes Pi's active tool selection to enforce permission. If the user or host excludes a required extension tool, the extension respects that choice. `force` fails before creating workflow state when the internal decision tool is unavailable. Prepared requests only require the public request tool because they carry their continuation outcome directly; the extension explains when a required tool must be re-enabled or the extension reloaded with its tools available. `agent-driven-allow`, `agent-driven-allow-once`, and `agent-driven-deny` update or arm session-local permission while reporting that execution remains unavailable. `abort` never changes the active tool selection.
 
 ## How it works
 
@@ -217,9 +207,9 @@ The hidden preparation prompt asks the agent to:
 - verify or persist completed work when applicable and follow scoped rules;
 - establish `continue` or `stop` and one exact immediate next action.
 
-The confirmation dialog whitespace-normalizes agent-created values — the next action and additional summary context — and limits them to the first 10 words plus `…` when longer. Major blocks are separated by one blank line. The complete values remain unchanged in workflow state, the canonical summary prompt, restored context, and continuation metadata, and user-supplied run context always travels in full through the same paths even though it never appears in a dialog.
+The confirmation dialog whitespace-normalizes agent-created values—the next action and additional summary context—and limits them to the first 10 words plus `…` when longer. Major blocks are separated by one blank line. The complete values remain unchanged in workflow state, the canonical summary prompt, restored context, and continuation metadata, and user-supplied run context always travels in full through the same paths even though it never appears in a dialog.
 
-When confirmation is required, the extension locks it before opening the dialog and rechecks authorization afterward. Configured or live-session no-confirm permission opens no dialog and begins the same guarded canonical-summary path directly; an explicit `run` or `force` also opens no dialog because the command is the authorization. A confirmed or explicitly authorized `stop` is a hard constraint. Without an explicit command flag, a `continue` choice is permission, not a mandate: the dedicated decision phase may conservatively choose `stop` when work is complete, blocked, awaiting input, or uncertain. Explicit `--stop` and `--continue` flags are authoritative user choices and cannot be changed by the agent; `/supercompact abort` is the pre-compaction cancellation path.
+When configured confirmation is enabled, the extension locks it before opening the dialog and rechecks authorization afterward. Otherwise configured, live-session, one-shot, automatic, `run`, and `force` authorization opens no dialog and begins the same guarded canonical-summary path directly. A confirmed or explicitly authorized `stop` is a hard constraint. Without an explicit command flag, a `continue` choice is permission, not a mandate: the dedicated decision phase may conservatively choose `stop` when work is complete, blocked, awaiting input, or uncertain. Explicit `--stop` and `--continue` flags are authoritative user choices and cannot be changed by the agent; `/supercompact abort` is the pre-compaction cancellation path.
 
 ### Canonical summary workflow
 
@@ -255,7 +245,7 @@ Relevant resources are grouped by work horizon. Exact file paths remain availabl
 
 When Pi is idle, preparation, decision, and summary messages trigger immediate steering turns. While Pi is responding, they are queued with steering semantics so the current tool batch finishes first.
 
-Operational status text is shown while the extension is preparing or awaiting confirmation:
+Operational status text is shown while the extension is preparing or awaiting configured confirmation:
 
 - `supercompact: preparing 🗜️ `
 - `supercompact: awaiting confirmation 🗜️ `
@@ -263,12 +253,11 @@ Operational status text is shown while the extension is preparing or awaiting co
 Explicit live-session permission and an armed one-shot grant add one of these status items:
 
 - `supercompact: agent-driven-allow 🗜️ `
-- `supercompact: agent-driven-allow-noconfirm 🗜️ `
-- `supercompact: agent-driven-allow-noconfirm-once 🗜️ `
+- `supercompact: agent-driven-allow-once 🗜️ `
 
-Every status string includes a trailing space after the emoji to separate adjacent status items. Configured permission is intentionally silent in the status area. Consuming or canceling a one-shot grant reveals the prior live-session status. `/supercompact agent-driven-deny` clears any live-session permission status, while a later `/supercompact agent-driven-allow` or `/supercompact agent-driven-allow-noconfirm` displays the new explicit override.
+Every status string includes a trailing space after the emoji to separate adjacent status items. Configured permission is intentionally silent in the status area. Consuming or canceling a one-shot grant reveals the prior live-session status. `/supercompact agent-driven-deny` clears any live-session permission status, while a later `/supercompact agent-driven-allow` displays the new explicit override.
 
-`run`, `agent-driven-allow`, `agent-driven-allow-noconfirm`, `agent-driven-allow-noconfirm-once`, `agent-driven-deny`, `abort`, confirmation, no-confirm execution, summary entry, settlement, and cleanup do not change the extension's active tool vector. This removes extension-caused mid-session schema invalidation and preserves an otherwise reusable prompt-cache prefix.
+`run`, `agent-driven-allow`, `agent-driven-allow-once`, `agent-driven-deny`, `abort`, configured confirmation, dialog-free execution, summary entry, settlement, and cleanup do not change the extension's active tool vector. This removes extension-caused mid-session schema invalidation and preserves an otherwise reusable prompt-cache prefix.
 
 It does not guarantee provider cache hits. Cache expiration, provider policy, model changes, unrelated extensions, host tool selection, system-prompt changes, and conversation-prefix differences can still cause misses.
 
@@ -276,12 +265,12 @@ Completed or canceled preparation-control messages, stale summary requests, dupl
 
 ### Headless behavior
 
-- TUI and RPC modes support the final confirmation dialog.
+- TUI and RPC modes support the configured final confirmation dialog.
 - `force` works in print and JSON modes because it is explicit authorization.
 - `run` works headlessly because the command itself is the authorization and never opens a dialog, exactly like `force`.
 - Automatic supercompact works headlessly because it never asks for confirmation.
-- `agent-driven-allow`, `agent-driven-allow-noconfirm`, `agent-driven-allow-noconfirm-once`, and `agent-driven-deny` update or arm session-local permission headlessly.
-- Confirmation-required agent execution fails closed without confirmation UI; configured, live-session, prepared-run, and one-shot no-confirm execution work headlessly while retaining every non-dialog guard.
+- `agent-driven-allow`, `agent-driven-allow-once`, and `agent-driven-deny` update or arm session-local permission headlessly.
+- Configured confirmation-required agent execution fails closed without confirmation UI; configured default, live-session, prepared-run, and one-shot permission work headlessly while retaining every non-dialog guard.
 - The bare menu requires TUI or RPC mode.
 
 ### Failure behavior
