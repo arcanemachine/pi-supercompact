@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-09-02
+
 - Simplify agent-driven permission commands: `/supercompact agent-driven-allow` now grants dialog-free permission for the live session, `/supercompact agent-driven-allow-once` grants it for one request, and the longer `agent-driven-allow-noconfirm` command names are removed.
 - Make the final confirmation dialog an explicit configuration opt-in through `agentRequestsRequireConfirmation` (default `false`) and remove the unused `requireConfirmation` setting.
 
