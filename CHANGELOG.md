@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Consolidate persistent configuration into the `pi-supercompact` namespace in
+  Pi's global or trusted-project `settings.json`; standalone
+  `pi-supercompact.json` files are no longer read.
+
 ## 0.5.0 - 2026-09-02
 
 - Simplify agent-driven permission commands: `/supercompact agent-driven-allow` now grants dialog-free permission for the live session, `/supercompact agent-driven-allow-once` grants it for one request, and the longer `agent-driven-allow-noconfirm` command names are removed.

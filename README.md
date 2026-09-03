@@ -131,21 +131,26 @@ These commands update or arm session-local permission and never write configurat
 
 ## Configuration
 
-Persistent request permission, optional confirmation, and automatic supercompact use an extension-specific JSON file:
+Persistent request permission, optional confirmation, and automatic supercompact use the `pi-supercompact` namespace in Pi's `settings.json` files:
 
 ```json
 {
-  "agentRequestsAllowed": true,
-  "agentRequestsRequireConfirmation": false,
-  "supercompact": {
-    "enabled": true,
-    "thresholdPercent": 80,
-    "forceThresholdPercent": 90
+  "pi-supercompact": {
+    "agentRequestsAllowed": true,
+    "agentRequestsRequireConfirmation": false,
+    "supercompact": {
+      "enabled": true,
+      "thresholdPercent": 80,
+      "forceThresholdPercent": 90
+    }
   }
 }
 ```
 
-The global file is `~/.pi/agent/pi-supercompact.json`. A trusted project may override it with `<project>/.pi/pi-supercompact.json`; a recognized project configuration is one complete overriding policy rather than a property-by-property merge. Project configuration is ignored for untrusted projects.
+The global settings file is `~/.pi/agent/settings.json`. A trusted project may
+override selected values in `<project>/.pi/settings.json`; Pi deep-merges nested
+objects, so omitted project values inherit the effective global values. Project
+settings are ignored for untrusted projects.
 
 - `agentRequestsAllowed` defaults to `false` and is the only property that grants persistent agent-driven permission.
 - `agentRequestsRequireConfirmation` defaults to `false`. Set it to `true` to opt configured agent-driven requests into the final TUI or RPC confirmation dialog. It does not grant permission by itself.

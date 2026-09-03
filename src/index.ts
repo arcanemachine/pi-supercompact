@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CONFIG_DIR_NAME,
   getAgentDir,
+  SettingsManager,
   type ContextEvent,
   type ExtensionAPI,
   type ExtensionContext,
@@ -19,13 +19,15 @@ const SESSION_PERMISSION_ENTRY_TYPE = "pi-supercompact:session-permission";
 const SESSION_AUTOMATIC_ENTRY_TYPE = "pi-supercompact:session-automatic";
 const DECISION_TOOL_NAME = "record_supercompact_decision";
 const AGENT_TOOL_NAME = "supercompact";
-const CONFIG_FILE_NAME = "pi-supercompact.json";
+const SETTINGS_FILE_NAME = "settings.json";
 const STATUS_KEY = "pi-supercompact";
 const LEGACY_SUMMARY_PLACEHOLDER =
   "Super-summary prepared; compacting context.";
 const MAX_WORKFLOW_ATTEMPTS = 3;
 const DEFAULT_THRESHOLD_PERCENT = 80;
 const DEFAULT_FORCE_THRESHOLD_PERCENT = 90;
+const INVALID_THRESHOLDS_MESSAGE =
+  "supercompact thresholds must be between 0 and 100, with thresholdPercent below forceThresholdPercent";
 const USAGE =
   "Usage: /supercompact [run [--stop|-s|--continue|-c] [extra context] | force [--stop|-s|--continue|-c] [extra context] | auto-enable | auto-disable | agent-driven-allow | agent-driven-allow-once | agent-driven-deny | abort]";
 
@@ -177,14 +179,15 @@ interface ConfiguredPolicy {
   automatic: AutomaticPolicy;
 }
 
+interface RawConfiguredPolicy {
+  allowed?: boolean;
+  agentRequestsRequireConfirmation?: boolean;
+  automatic?: Partial<AutomaticPolicy>;
+}
+
 type ConfigReadResult =
   | { kind: "absent" }
-  | {
-      kind: "valid";
-      allowed: boolean;
-      agentRequestsRequireConfirmation: boolean;
-      automatic: AutomaticPolicy;
-    }
+  | { kind: "valid"; config: RawConfiguredPolicy }
   | { kind: "invalid"; error: string };
 
 const AgentToolParameters = Type.Object(
@@ -225,125 +228,182 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function readAgentRequestConfig(path: string): ConfigReadResult {
-  let content: string;
-  try {
-    content = readFileSync(path, "utf8");
-  } catch (error) {
-    if (
-      isRecord(error) &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
-      return { kind: "absent" };
-    }
-    return {
-      kind: "invalid",
-      error: error instanceof Error ? error.message : String(error),
-    };
+function readAgentRequestConfig(
+  settings: unknown,
+  sourceLabel: string,
+): ConfigReadResult {
+  if (!isRecord(settings)) {
+    return { kind: "invalid", error: "the settings root must be an object" };
   }
 
-  try {
-    const parsed: unknown = JSON.parse(content);
-    if (!isRecord(parsed)) {
-      return { kind: "invalid", error: "the root value must be an object" };
-    }
+  const namespace = settings[STATUS_KEY];
+  if (namespace === undefined) return { kind: "absent" };
+  if (!isRecord(namespace)) {
+    return { kind: "invalid", error: "pi-supercompact must be an object" };
+  }
 
-    const recognizedProperties = [
-      "agentRequestsAllowed",
-      "agentRequestsRequireConfirmation",
-      "supercompact",
-    ];
-    if (!recognizedProperties.some((property) => property in parsed)) {
-      return { kind: "absent" };
-    }
+  const recognizedProperties = [
+    "agentRequestsAllowed",
+    "agentRequestsRequireConfirmation",
+    "supercompact",
+  ];
+  if (!recognizedProperties.some((property) => property in namespace)) {
+    return { kind: "absent" };
+  }
 
-    for (const property of [
-      "agentRequestsAllowed",
-      "agentRequestsRequireConfirmation",
-    ]) {
-      if (property in parsed && typeof parsed[property] !== "boolean") {
-        return {
-          kind: "invalid",
-          error: `${property} must be true or false`,
-        };
-      }
-    }
-
-    const supercompact = parsed.supercompact;
-    if (supercompact !== undefined && !isRecord(supercompact)) {
-      return { kind: "invalid", error: "supercompact must be an object" };
-    }
-    if (isRecord(supercompact)) {
-      if (typeof supercompact.enabled !== "boolean") {
-        return {
-          kind: "invalid",
-          error: "supercompact.enabled must be true or false",
-        };
-      }
-      for (const property of ["thresholdPercent", "forceThresholdPercent"]) {
-        if (
-          property in supercompact &&
-          (typeof supercompact[property] !== "number" ||
-            !Number.isFinite(supercompact[property]))
-        ) {
-          return {
-            kind: "invalid",
-            error: `supercompact.${property} must be a finite number`,
-          };
-        }
-      }
-    }
-
-    const thresholdPercent =
-      isRecord(supercompact) &&
-      typeof supercompact.thresholdPercent === "number"
-        ? supercompact.thresholdPercent
-        : DEFAULT_THRESHOLD_PERCENT;
-    const forceThresholdPercent =
-      isRecord(supercompact) &&
-      typeof supercompact.forceThresholdPercent === "number"
-        ? supercompact.forceThresholdPercent
-        : DEFAULT_FORCE_THRESHOLD_PERCENT;
-    if (
-      thresholdPercent <= 0 ||
-      thresholdPercent >= 100 ||
-      forceThresholdPercent <= 0 ||
-      forceThresholdPercent >= 100 ||
-      thresholdPercent >= forceThresholdPercent
-    ) {
+  for (const property of [
+    "agentRequestsAllowed",
+    "agentRequestsRequireConfirmation",
+  ]) {
+    if (property in namespace && typeof namespace[property] !== "boolean") {
       return {
         kind: "invalid",
-        error:
-          "supercompact thresholds must be between 0 and 100, with thresholdPercent below forceThresholdPercent",
+        error: `${sourceLabel}.${property} must be true or false`,
       };
     }
+  }
 
-    return {
-      kind: "valid",
-      allowed:
-        typeof parsed.agentRequestsAllowed === "boolean"
-          ? parsed.agentRequestsAllowed
-          : false,
-      agentRequestsRequireConfirmation:
-        typeof parsed.agentRequestsRequireConfirmation === "boolean"
-          ? parsed.agentRequestsRequireConfirmation
-          : false,
-      automatic: {
-        enabled:
-          isRecord(supercompact) && typeof supercompact.enabled === "boolean"
-            ? supercompact.enabled
-            : false,
-        thresholdPercent,
-        forceThresholdPercent,
-      },
-    };
-  } catch (error) {
+  const supercompact = namespace.supercompact;
+  if (supercompact !== undefined && !isRecord(supercompact)) {
     return {
       kind: "invalid",
-      error: error instanceof Error ? error.message : String(error),
+      error: `${sourceLabel}.supercompact must be an object`,
     };
   }
+  if (isRecord(supercompact)) {
+    for (const property of [
+      "enabled",
+      "thresholdPercent",
+      "forceThresholdPercent",
+    ]) {
+      if (!(property in supercompact)) continue;
+      const value = supercompact[property];
+      if (property === "enabled" && typeof value !== "boolean") {
+        return {
+          kind: "invalid",
+          error: `${sourceLabel}.supercompact.enabled must be true or false`,
+        };
+      }
+      if (
+        property !== "enabled" &&
+        (typeof value !== "number" || !Number.isFinite(value))
+      ) {
+        return {
+          kind: "invalid",
+          error: `${sourceLabel}.supercompact.${property} must be a finite number`,
+        };
+      }
+    }
+  }
+
+  return {
+    kind: "valid",
+    config: {
+      ...(typeof namespace.agentRequestsAllowed === "boolean"
+        ? { allowed: namespace.agentRequestsAllowed }
+        : {}),
+      ...(typeof namespace.agentRequestsRequireConfirmation === "boolean"
+        ? {
+            agentRequestsRequireConfirmation:
+              namespace.agentRequestsRequireConfirmation,
+          }
+        : {}),
+      ...(isRecord(supercompact)
+        ? {
+            automatic: {
+              ...(typeof supercompact.enabled === "boolean"
+                ? { enabled: supercompact.enabled }
+                : {}),
+              ...(typeof supercompact.thresholdPercent === "number"
+                ? { thresholdPercent: supercompact.thresholdPercent }
+                : {}),
+              ...(typeof supercompact.forceThresholdPercent === "number"
+                ? { forceThresholdPercent: supercompact.forceThresholdPercent }
+                : {}),
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+function defaultConfiguredPolicy(): ConfiguredPolicy {
+  return {
+    permission: "denied",
+    automatic: {
+      enabled: false,
+      thresholdPercent: DEFAULT_THRESHOLD_PERCENT,
+      forceThresholdPercent: DEFAULT_FORCE_THRESHOLD_PERCENT,
+    },
+  };
+}
+
+function mergeConfiguredPolicy(
+  global: RawConfiguredPolicy,
+  project: RawConfiguredPolicy,
+): RawConfiguredPolicy {
+  return {
+    ...global,
+    ...project,
+    automatic:
+      global.automatic || project.automatic
+        ? { ...global.automatic, ...project.automatic }
+        : undefined,
+  };
+}
+
+function policyFromConfig(
+  config: RawConfiguredPolicy,
+): ConfiguredPolicy | undefined {
+  if (config.automatic && config.automatic.enabled === undefined) {
+    return undefined;
+  }
+  const automatic = {
+    enabled: config.automatic?.enabled ?? false,
+    thresholdPercent:
+      config.automatic?.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT,
+    forceThresholdPercent:
+      config.automatic?.forceThresholdPercent ??
+      DEFAULT_FORCE_THRESHOLD_PERCENT,
+  };
+  if (
+    automatic.thresholdPercent <= 0 ||
+    automatic.thresholdPercent >= 100 ||
+    automatic.forceThresholdPercent <= 0 ||
+    automatic.forceThresholdPercent >= 100 ||
+    automatic.thresholdPercent >= automatic.forceThresholdPercent
+  ) {
+    return undefined;
+  }
+  return {
+    permission:
+      config.allowed === true
+        ? config.agentRequestsRequireConfirmation
+          ? "allowed"
+          : "allowed-noconfirm"
+        : "denied",
+    automatic,
+  };
+}
+
+export function resolveConfiguredPolicy(
+  globalSettings: unknown,
+  projectSettings: unknown,
+  projectTrusted: boolean,
+): ConfiguredPolicy {
+  const global = readAgentRequestConfig(globalSettings, "global settings");
+  const project = projectTrusted
+    ? readAgentRequestConfig(projectSettings, "trusted project settings")
+    : { kind: "absent" as const };
+  if (global.kind === "invalid" || project.kind === "invalid") {
+    return defaultConfiguredPolicy();
+  }
+
+  const merged = mergeConfiguredPolicy(
+    global.kind === "valid" ? global.config : {},
+    project.kind === "valid" ? project.config : {},
+  );
+  return policyFromConfig(merged) ?? defaultConfiguredPolicy();
 }
 
 function noConfirmAuthorizationLabel(
@@ -924,54 +984,91 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       : `${message.replace(/[.\s]+$/, "")}. No automatic retry will occur.`;
 
   const loadConfiguredPolicy = (ctx: ExtensionContext): ConfiguredPolicy => {
-    const configs: Array<{ path: string; result: ConfigReadResult }> = [];
-    const globalPath = join(getAgentDir(), CONFIG_FILE_NAME);
-    configs.push({
-      path: globalPath,
-      result: readAgentRequestConfig(globalPath),
-    });
-
-    if (ctx.isProjectTrusted()) {
-      const projectPath = join(ctx.cwd, CONFIG_DIR_NAME, CONFIG_FILE_NAME);
-      configs.push({
-        path: projectPath,
-        result: readAgentRequestConfig(projectPath),
+    const projectTrusted = ctx.isProjectTrusted();
+    let manager: SettingsManager;
+    try {
+      manager = SettingsManager.create(ctx.cwd, getAgentDir(), {
+        projectTrusted,
       });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      notify(
+        ctx,
+        `Ignoring invalid supercompact config: unable to load settings (${message})`,
+        "warning",
+      );
+      return defaultConfiguredPolicy();
     }
-
-    let policy: ConfiguredPolicy = {
-      permission: "denied",
-      automatic: {
-        enabled: false,
-        thresholdPercent: DEFAULT_THRESHOLD_PERCENT,
-        forceThresholdPercent: DEFAULT_FORCE_THRESHOLD_PERCENT,
-      },
-    };
-    for (const config of configs) {
-      if (config.result.kind === "valid") {
-        policy = {
-          permission: config.result.allowed
-            ? config.result.agentRequestsRequireConfirmation
-              ? "allowed"
-              : "allowed-noconfirm"
-            : "denied",
-          automatic: config.result.automatic,
-        };
-      } else if (config.result.kind === "invalid") {
-        policy = {
-          permission: "denied",
-          automatic: {
-            enabled: false,
-            thresholdPercent: DEFAULT_THRESHOLD_PERCENT,
-            forceThresholdPercent: DEFAULT_FORCE_THRESHOLD_PERCENT,
-          },
-        };
+    const settingsErrors = manager.drainErrors();
+    if (settingsErrors.length > 0) {
+      for (const settingsError of settingsErrors) {
+        const path =
+          settingsError.scope === "global"
+            ? join(getAgentDir(), SETTINGS_FILE_NAME)
+            : join(ctx.cwd, CONFIG_DIR_NAME, SETTINGS_FILE_NAME);
+        const message =
+          settingsError.error instanceof Error
+            ? settingsError.error.message
+            : String(settingsError.error);
         notify(
           ctx,
-          `Ignoring invalid supercompact config at ${config.path}: ${config.result.error}`,
+          `Ignoring invalid supercompact config at ${path}: unable to load settings (${message})`,
           "warning",
         );
       }
+      return defaultConfiguredPolicy();
+    }
+
+    const globalSettings = manager.getGlobalSettings();
+    const projectSettings = manager.getProjectSettings();
+    const globalResult = readAgentRequestConfig(
+      globalSettings,
+      "global settings.pi-supercompact",
+    );
+    const projectResult = projectTrusted
+      ? readAgentRequestConfig(
+          projectSettings,
+          "trusted project settings.pi-supercompact",
+        )
+      : { kind: "absent" as const };
+
+    for (const [scope, result] of [
+      ["global", globalResult],
+      ["trusted project", projectResult],
+    ] as const) {
+      if (result.kind === "invalid") {
+        const path =
+          scope === "global"
+            ? join(getAgentDir(), SETTINGS_FILE_NAME)
+            : join(ctx.cwd, CONFIG_DIR_NAME, SETTINGS_FILE_NAME);
+        notify(
+          ctx,
+          `Ignoring invalid supercompact config at ${path}: ${result.error}`,
+          "warning",
+        );
+      }
+    }
+
+    if (globalResult.kind === "invalid" || projectResult.kind === "invalid") {
+      return defaultConfiguredPolicy();
+    }
+
+    const merged = mergeConfiguredPolicy(
+      globalResult.kind === "valid" ? globalResult.config : {},
+      projectResult.kind === "valid" ? projectResult.config : {},
+    );
+    const policy = policyFromConfig(merged);
+    if (!policy) {
+      const path =
+        projectResult.kind === "valid"
+          ? join(ctx.cwd, CONFIG_DIR_NAME, SETTINGS_FILE_NAME)
+          : join(getAgentDir(), SETTINGS_FILE_NAME);
+      notify(
+        ctx,
+        `Ignoring invalid supercompact config at ${path}: ${INVALID_THRESHOLDS_MESSAGE}`,
+        "warning",
+      );
+      return defaultConfiguredPolicy();
     }
     return policy;
   };

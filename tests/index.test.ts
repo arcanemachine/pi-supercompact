@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  SettingsManager,
+  type ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import extension, {
@@ -9,11 +11,8 @@ import extension, {
   buildPreparationPrompt,
   buildSummaryPrompt,
   previewConfirmationValue,
+  resolveConfiguredPolicy,
 } from "../src/index.js";
-
-vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
-
-const readFileSyncMock = vi.mocked(readFileSync);
 
 type Handler = (event: any, ctx: any) => any;
 
@@ -41,25 +40,34 @@ interface HarnessOptions {
   contextUsage?:
     | { tokens: number | null; contextWindow: number; percent: number | null }
     | undefined;
+  settingsErrors?: Array<{ scope: "global" | "project"; error: Error }>;
 }
 
-function missingFile(): Error & { code: string } {
-  return Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+function settingsObject(config: string | undefined): unknown {
+  if (config === undefined) return {};
+  try {
+    return { "pi-supercompact": JSON.parse(config) };
+  } catch {
+    return config;
+  }
 }
 
 function createHarness(options: HarnessOptions = {}) {
-  readFileSyncMock.mockImplementation((path) => {
-    const value = String(path);
-    if (value === `${PROJECT_CWD}/.pi/pi-supercompact.json`) {
-      if (options.projectConfig !== undefined) return options.projectConfig;
-      throw missingFile();
-    }
-    if (value.endsWith("/pi-supercompact.json")) {
-      if (options.globalConfig !== undefined) return options.globalConfig;
-      throw missingFile();
-    }
-    throw missingFile();
-  });
+  const globalSettings = settingsObject(options.globalConfig);
+  const projectSettings = settingsObject(options.projectConfig);
+  const manager = {
+    drainErrors: vi.fn(() => options.settingsErrors ?? []),
+    getGlobalSettings: vi.fn(() => globalSettings),
+    getProjectSettings: vi.fn(() => projectSettings),
+  };
+  const createSettingsManager = SettingsManager.create as any;
+  if (vi.isMockFunction(createSettingsManager)) {
+    createSettingsManager.mockImplementation(() => manager);
+  } else {
+    vi.spyOn(SettingsManager, "create").mockImplementation(
+      () => manager as any,
+    );
+  }
 
   const handlers = new Map<string, Handler>();
   const commands = new Map<string, any>();
@@ -422,7 +430,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
 
 describe("commands and menu", () => {
   it("1. bare command opens the consolidated menu", async () => {
@@ -740,6 +751,96 @@ describe("commands and menu", () => {
 });
 
 describe("configuration and live-session permission", () => {
+  it("deep-merges nested project automatic settings", () => {
+    expect(
+      resolveConfiguredPolicy(
+        {
+          "pi-supercompact": {
+            agentRequestsAllowed: true,
+            supercompact: {
+              enabled: true,
+              thresholdPercent: 70,
+              forceThresholdPercent: 90,
+            },
+          },
+        },
+        {
+          "pi-supercompact": {
+            supercompact: { thresholdPercent: 75 },
+          },
+        },
+        true,
+      ),
+    ).toEqual({
+      permission: "allowed-noconfirm",
+      automatic: {
+        enabled: true,
+        thresholdPercent: 75,
+        forceThresholdPercent: 90,
+      },
+    });
+  });
+
+  it("ignores an untrusted project namespace", () => {
+    expect(
+      resolveConfiguredPolicy(
+        { "pi-supercompact": { agentRequestsAllowed: true } },
+        { "pi-supercompact": { agentRequestsAllowed: false } },
+        false,
+      ).permission,
+    ).toBe("allowed-noconfirm");
+  });
+
+  it("requires enabled when automatic settings have no inherited value", () => {
+    expect(
+      resolveConfiguredPolicy(
+        { "pi-supercompact": { supercompact: { thresholdPercent: 70 } } },
+        {},
+        false,
+      ),
+    ).toEqual({
+      permission: "denied",
+      automatic: {
+        enabled: false,
+        thresholdPercent: 80,
+        forceThresholdPercent: 90,
+      },
+    });
+  });
+
+  it("inherits enabled for a partial trusted project automatic namespace", () => {
+    expect(
+      resolveConfiguredPolicy(
+        {
+          "pi-supercompact": {
+            supercompact: {
+              enabled: true,
+              thresholdPercent: 70,
+              forceThresholdPercent: 90,
+            },
+          },
+        },
+        { "pi-supercompact": { supercompact: { thresholdPercent: 75 } } },
+        true,
+      ).automatic,
+    ).toEqual({
+      enabled: true,
+      thresholdPercent: 75,
+      forceThresholdPercent: 90,
+    });
+  });
+
+  it("fails closed when SettingsManager reports malformed settings", async () => {
+    const harness = createHarness({
+      settingsErrors: [{ scope: "global", error: new Error("malformed JSON") }],
+    });
+    await expect(confirmPreparation(harness)).rejects.toThrow("not authorized");
+    expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("unable to load settings"),
+      "warning",
+    );
+  });
+
   it("9. missing config defaults to denied while both schemas stay active", async () => {
     const harness = createHarness();
     expect(harness.activeTools()).toEqual([
@@ -817,9 +918,9 @@ describe("configuration and live-session permission", () => {
     const harness = createHarness({
       globalConfig: '{"agentRequestsAllowed":false}',
     });
-    const reads = readFileSyncMock.mock.calls.length;
+    const reads = (SettingsManager.create as any).mock.calls.length;
     await harness.command().handler("agent-driven-allow", harness.ctx);
-    expect(readFileSyncMock.mock.calls).toHaveLength(reads);
+    expect((SettingsManager.create as any).mock.calls).toHaveLength(reads);
     await expect(confirmPreparation(harness)).resolves.toMatchObject({
       details: { status: "queued" },
     });
@@ -829,9 +930,9 @@ describe("configuration and live-session permission", () => {
     const harness = createHarness({
       globalConfig: '{"agentRequestsAllowed":true}',
     });
-    const reads = readFileSyncMock.mock.calls.length;
+    const reads = (SettingsManager.create as any).mock.calls.length;
     await harness.command().handler("agent-driven-deny", harness.ctx);
-    expect(readFileSyncMock.mock.calls).toHaveLength(reads);
+    expect((SettingsManager.create as any).mock.calls).toHaveLength(reads);
     await expect(confirmPreparation(harness)).rejects.toThrow(
       "explicitly denied",
     );
@@ -965,16 +1066,14 @@ describe("configuration and live-session permission", () => {
     });
   });
 
-  it("treats trusted project configuration as one overriding policy", async () => {
+  it("deep-merges trusted project configuration over global policy", async () => {
     const harness = createHarness({
       globalConfig: '{"agentRequestsAllowed":true}',
       projectConfig: '{"agentRequestsRequireConfirmation":true}',
     });
-    await expect(confirmPreparation(harness)).rejects.toThrow("not authorized");
-    await beginPreparation(harness);
     const result = await confirmPreparation(harness);
-    expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
-    expect(result.details.authorization).toBe("prepared-no-confirm");
+    expect(harness.ctx.ui.confirm).toHaveBeenCalledOnce();
+    expect(result.details.status).toBe("queued");
   });
 
   it("fails closed for invalid agent confirmation settings", async () => {
@@ -1061,12 +1160,12 @@ describe("session-only no-confirm permission", () => {
   it("allows requests without a dialog and reports the authorization", async () => {
     const harness = createHarness();
     const initialTools = harness.activeTools();
-    const reads = readFileSyncMock.mock.calls.length;
+    const reads = (SettingsManager.create as any).mock.calls.length;
 
     await harness.command().handler("agent-driven-allow", harness.ctx);
     const result = await confirmPreparation(harness);
 
-    expect(readFileSyncMock.mock.calls).toHaveLength(reads);
+    expect((SettingsManager.create as any).mock.calls).toHaveLength(reads);
     expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
     expect(harness.messages(DECISION_REQUEST_TYPE)).toHaveLength(0);
     expect(harness.messages(SUMMARY_REQUEST_TYPE)[0].content).toContain(
