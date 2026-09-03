@@ -105,7 +105,7 @@ If user input is required, the agent asks and waits. The one-off authorization r
 /supercompact agent-driven-allow-once
 ```
 
-`agent-driven-allow-once` arms the next valid agent-driven supercompaction without starting preparation or compaction itself. The user can then instruct the agent to complete the normal focused preparation and request supercompaction. The grant temporarily overlays denied or confirmation-required configured permission without changing it, and the request proceeds without a confirmation dialog. While armed, the status is `supercompact: agent-driven-allow-once 🗜️ `.
+`agent-driven-allow-once` arms the next valid agent-driven supercompaction without starting preparation or compaction itself. The user can then instruct the agent to complete the normal focused preparation and request supercompaction. The grant temporarily overlays denied or confirmation-required configured permission without changing it, and the request proceeds without a confirmation dialog. While armed, the status is `Supercompact: agent-driven-allow-once 🗜️ `.
 
 The grant is consumed only after a valid request successfully queues canonical-summary work. Invalid arguments, unavailable tools, or a synchronous queueing failure leave it armed; once work is queued, a later abort or failure does not re-arm it. Consumption automatically reveals the prior configured or live-session permission and status.
 
@@ -247,13 +247,13 @@ When Pi is idle, preparation, decision, and summary messages trigger immediate s
 
 Operational status text is shown while the extension is preparing or awaiting configured confirmation:
 
-- `supercompact: preparing 🗜️ `
-- `supercompact: awaiting confirmation 🗜️ `
+- `Supercompact: preparing 🗜️ `
+- `Supercompact: awaiting confirmation 🗜️ `
 
 Explicit live-session permission and an armed one-shot grant add one of these status items:
 
-- `supercompact: agent-driven-allow 🗜️ `
-- `supercompact: agent-driven-allow-once 🗜️ `
+- `Supercompact: agent-driven-allow 🗜️ `
+- `Supercompact: agent-driven-allow-once 🗜️ `
 
 Every status string includes a trailing space after the emoji to separate adjacent status items. Configured permission is intentionally silent in the status area. Consuming or canceling a one-shot grant reveals the prior live-session status. `/supercompact agent-driven-deny` clears any live-session permission status, while a later `/supercompact agent-driven-allow` displays the new explicit override.
 

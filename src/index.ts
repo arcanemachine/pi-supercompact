@@ -834,13 +834,13 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     if (!ctx.hasUI) return;
     const status =
       confirmationId && !confirmationRevoked
-        ? "supercompact: awaiting confirmation 🗜️ "
+        ? "Supercompact: awaiting confirmation 🗜️ "
         : preparationGrant && !preparationGrant.consumed
-          ? "supercompact: preparing 🗜️ "
+          ? "Supercompact: preparing 🗜️ "
           : oneShotNoConfirmGrant
-            ? "supercompact: agent-driven-allow-once 🗜️ "
+            ? "Supercompact: agent-driven-allow-once 🗜️ "
             : sessionPermissionOverride === "allowed-noconfirm"
-              ? "supercompact: agent-driven-allow 🗜️ "
+              ? "Supercompact: agent-driven-allow 🗜️ "
               : undefined;
     ctx.ui.setStatus(STATUS_KEY, status);
   };

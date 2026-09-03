@@ -464,7 +464,7 @@ describe("commands and menu", () => {
 
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow 🗜️ ",
+      "Supercompact: agent-driven-allow 🗜️ ",
     );
     await confirmPreparation(harness);
     expect(harness.ctx.ui.confirm).not.toHaveBeenCalled();
@@ -480,7 +480,7 @@ describe("commands and menu", () => {
 
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow-once 🗜️ ",
+      "Supercompact: agent-driven-allow-once 🗜️ ",
     );
     const result = await confirmPreparation(harness);
     expect(result.details.authorization).toBe("one-shot-no-confirm");
@@ -887,14 +887,14 @@ describe("configuration and live-session permission", () => {
     await harness.command().handler("agent-driven-allow", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow 🗜️ ",
+      "Supercompact: agent-driven-allow 🗜️ ",
     );
 
     await harness.command().handler("agent-driven-deny", harness.ctx);
     await harness.command().handler("agent-driven-allow", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow 🗜️ ",
+      "Supercompact: agent-driven-allow 🗜️ ",
     );
   });
 
@@ -1084,7 +1084,7 @@ describe("session-only no-confirm permission", () => {
     });
     expect(harness.ctx.ui.setStatus).toHaveBeenCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow 🗜️ ",
+      "Supercompact: agent-driven-allow 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenCalledWith(
       "Supercompaction is proceeding: live-session no-confirm permission.",
@@ -1174,7 +1174,7 @@ describe("session-only no-confirm permission", () => {
     expect(noConfirm.ctx.ui.confirm).not.toHaveBeenCalled();
     expect(noConfirm.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow 🗜️ ",
+      "Supercompact: agent-driven-allow 🗜️ ",
     );
 
     const configuredConfirmation = createHarness({
@@ -1360,7 +1360,7 @@ describe("one-shot no-confirm permission", () => {
     );
     expect(liveSession.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow 🗜️ ",
+      "Supercompact: agent-driven-allow 🗜️ ",
     );
     await expect(confirmPreparation(liveSession)).resolves.toMatchObject({
       details: { authorization: "session-no-confirm" },
@@ -1377,7 +1377,7 @@ describe("one-shot no-confirm permission", () => {
       .handler("agent-driven-allow-once", overriddenConfig.ctx);
     expect(overriddenConfig.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow-once 🗜️ ",
+      "Supercompact: agent-driven-allow-once 🗜️ ",
     );
   });
 
@@ -1389,7 +1389,7 @@ describe("one-shot no-confirm permission", () => {
     ).rejects.toThrow("Supply one concrete next action");
     expect(invalid.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow-once 🗜️ ",
+      "Supercompact: agent-driven-allow-once 🗜️ ",
     );
     await expect(confirmPreparation(invalid)).resolves.toMatchObject({
       details: { authorization: "one-shot-no-confirm" },
@@ -1420,7 +1420,7 @@ describe("one-shot no-confirm permission", () => {
     );
     expect(queueFailure.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow-once 🗜️ ",
+      "Supercompact: agent-driven-allow-once 🗜️ ",
     );
     await expect(confirmPreparation(queueFailure)).resolves.toMatchObject({
       details: { authorization: "one-shot-no-confirm" },
@@ -1553,7 +1553,7 @@ describe("preparation", () => {
     expect(harness.activeTools()).toContain(AGENT_TOOL_NAME);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: preparing 🗜️ ",
+      "Supercompact: preparing 🗜️ ",
     );
   });
 
@@ -1838,7 +1838,7 @@ describe("final confirmation", () => {
     const first = confirmPreparation(harness);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: awaiting confirmation 🗜️ ",
+      "Supercompact: awaiting confirmation 🗜️ ",
     );
     await expect(confirmPreparation(harness)).rejects.toThrow(
       "already awaiting the user's response",
@@ -2315,7 +2315,7 @@ describe("preserved workflow regressions", () => {
     await harness.command().handler("agent-driven-allow", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow 🗜️ ",
+      "Supercompact: agent-driven-allow 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
       expect.stringContaining("Execution remains unavailable"),
@@ -2324,7 +2324,7 @@ describe("preserved workflow regressions", () => {
     await harness.command().handler("agent-driven-allow", harness.ctx);
     expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith(
       "pi-supercompact",
-      "supercompact: agent-driven-allow 🗜️ ",
+      "Supercompact: agent-driven-allow 🗜️ ",
     );
     expect(harness.ctx.ui.notify).toHaveBeenLastCalledWith(
       expect.stringContaining("Execution remains unavailable"),
@@ -2997,7 +2997,7 @@ describe("stable-schema runtime gates", () => {
 
 describe("automatic supercompact", () => {
   const automaticConfig = JSON.stringify({
-    supercompact: {
+    Supercompact: {
       enabled: true,
       thresholdPercent: 80,
       forceThresholdPercent: 90,
