@@ -84,11 +84,11 @@ export interface ParsedSuperSummary {
 
 export interface ConfirmedPreparationContext {
   authorization?:
-  | "session-no-confirm"
-  | "configured-no-confirm"
-  | "prepared-no-confirm"
-  | "one-shot-no-confirm"
-  | "automatic-no-confirm";
+    | "session-no-confirm"
+    | "configured-no-confirm"
+    | "prepared-no-confirm"
+    | "one-shot-no-confirm"
+    | "automatic-no-confirm";
   expectedContinuation: ContinuationAction;
   nextAction: string;
   runExtraContext?: string;
@@ -304,24 +304,24 @@ function readAgentRequestConfig(
         : {}),
       ...(typeof namespace.agentRequestsRequireConfirmation === "boolean"
         ? {
-          agentRequestsRequireConfirmation:
-            namespace.agentRequestsRequireConfirmation,
-        }
+            agentRequestsRequireConfirmation:
+              namespace.agentRequestsRequireConfirmation,
+          }
         : {}),
       ...(isRecord(supercompact)
         ? {
-          automatic: {
-            ...(typeof supercompact.enabled === "boolean"
-              ? { enabled: supercompact.enabled }
-              : {}),
-            ...(typeof supercompact.thresholdPercent === "number"
-              ? { thresholdPercent: supercompact.thresholdPercent }
-              : {}),
-            ...(typeof supercompact.forceThresholdPercent === "number"
-              ? { forceThresholdPercent: supercompact.forceThresholdPercent }
-              : {}),
-          },
-        }
+            automatic: {
+              ...(typeof supercompact.enabled === "boolean"
+                ? { enabled: supercompact.enabled }
+                : {}),
+              ...(typeof supercompact.thresholdPercent === "number"
+                ? { thresholdPercent: supercompact.thresholdPercent }
+                : {}),
+              ...(typeof supercompact.forceThresholdPercent === "number"
+                ? { forceThresholdPercent: supercompact.forceThresholdPercent }
+                : {}),
+            },
+          }
         : {}),
     },
   };
@@ -503,7 +503,7 @@ function staticComponent(lines: string[]) {
         line.split(/\r?\n/).map((part) => truncateToWidth(part, maxWidth, "")),
       );
     },
-    invalidate: () => { },
+    invalidate: () => {},
   };
 }
 
@@ -514,11 +514,11 @@ export function buildPreparationPrompt(
 ): string {
   const emphasis = extraContext.trim()
     ? [
-      "The user supplied this preparation context. Give it high priority within established authorization and scope:",
-      "<preparation-context>",
-      extraContext.trim(),
-      "</preparation-context>",
-    ].join("\n")
+        "The user supplied this preparation context. Give it high priority within established authorization and scope:",
+        "<preparation-context>",
+        extraContext.trim(),
+        "</preparation-context>",
+      ].join("\n")
     : automatic
       ? "No extra preparation context was supplied."
       : "The user supplied no extra preparation context.";
@@ -529,8 +529,8 @@ export function buildPreparationPrompt(
       : "Perform a focused pre-compaction checkpoint for the active work. Do not compact immediately.",
     ...(automatic
       ? [
-        `This is a preparation checkpoint, not the canonical summary turn. Do not write a handoff, claim compaction is complete, or stop after describing the next action. When no user input is needed, finish by calling ${AGENT_TOOL_NAME} with the continuation decision and exact next action; prose alone does not complete preparation. If user input is required, ask the question and wait.`,
-      ]
+          `This is a preparation checkpoint, not the canonical summary turn. Do not write a handoff, claim compaction is complete, or stop after describing the next action. When no user input is needed, finish by calling ${AGENT_TOOL_NAME} with the continuation decision and exact next action; prose alone does not complete preparation. If user input is required, ask the question and wait.`,
+        ]
       : []),
     "Use the current conversation, relevant durable sources, and actual current state rather than relying on memory.",
     "Do not broaden the task, invent work, or turn this checkpoint into a broad audit or ceremonial report.",
@@ -538,9 +538,9 @@ export function buildPreparationPrompt(
     emphasis,
     ...(continuationOverride
       ? [
-        "",
-        `The user explicitly selected --${continuationOverride} for this run command. The continuation value is fixed and must not be changed by the agent. Call ${AGENT_TOOL_NAME} with continuation set to ${continuationOverride}.`,
-      ]
+          "",
+          `The user explicitly selected --${continuationOverride} for this run command. The continuation value is fixed and must not be changed by the agent. Call ${AGENT_TOOL_NAME} with continuation set to ${continuationOverride}.`,
+        ]
       : []),
     "",
     "Refresh relevant context:",
@@ -557,8 +557,8 @@ export function buildPreparationPrompt(
     "- Establish whether work should continue or stop after compaction. If continuing, identify one exact immediate next action that remains authorized and needs no additional input.",
     ...(automatic
       ? [
-        "- Automatic supercompact was triggered by context usage and may have interrupted active work. Preserve momentum: choose continue when authorized work is clearly unfinished and can proceed without new user input, and preserve the active objective, constraints, progress, and one exact next action through compaction. Choose stop only when work is complete, blocked, awaiting user input or approval, or continuation would be unsafe or uncertain. Do not invent, broaden, or continue optional work merely to avoid stopping.",
-      ]
+          "- Automatic supercompact was triggered by context usage and may have interrupted active work. Preserve momentum: choose continue when authorized work is clearly unfinished and can proceed without new user input, and preserve the active objective, constraints, progress, and one exact next action through compaction. Choose stop only when work is complete, blocked, awaiting user input or approval, or continuation would be unsafe or uncertain. Do not invent, broaden, or continue optional work merely to avoid stopping.",
+        ]
       : []),
     "- Re-read changed material when applicable and make a final accuracy pass.",
     "",
@@ -574,17 +574,17 @@ export function buildDecisionPrompt(
 ): string {
   const preparationGuidance = preparation
     ? [
-      preparation.authorization
-        ? `${noConfirmAuthorizationSubject(preparation.authorization)} authorized this preparation outcome:`
-        : "The user confirmed this preparation outcome:",
-      `<authorized-preparation>`,
-      `Expected continuation: ${preparation.expectedContinuation}`,
-      `Exact next action: ${preparation.nextAction}`,
-      `</authorized-preparation>`,
-      preparation.expectedContinuation === "stop"
-        ? "The authorized stop is a hard constraint. The decision must be stop."
-        : "The authorized continue permits continuation but does not force it. Choose stop if missing input, a blocker, completed work, or uncertainty makes continuation unsafe.",
-    ].join("\n")
+        preparation.authorization
+          ? `${noConfirmAuthorizationSubject(preparation.authorization)} authorized this preparation outcome:`
+          : "The user confirmed this preparation outcome:",
+        `<authorized-preparation>`,
+        `Expected continuation: ${preparation.expectedContinuation}`,
+        `Exact next action: ${preparation.nextAction}`,
+        `</authorized-preparation>`,
+        preparation.expectedContinuation === "stop"
+          ? "The authorized stop is a hard constraint. The decision must be stop."
+          : "The authorized continue permits continuation but does not force it. Choose stop if missing input, a blocker, completed work, or uncertainty makes continuation unsafe.",
+      ].join("\n")
     : automaticForce
       ? "Automatic supercompact reached its force threshold. Choose continue only for clearly unfinished authorized work that can proceed without new user input; otherwise choose stop."
       : "No preparation outcome was supplied. Choose continue only when clearly unfinished authorized work can proceed without new user input; otherwise choose stop.";
@@ -597,8 +597,8 @@ export function buildDecisionPrompt(
     preparationGuidance,
     ...(continuationOverride
       ? [
-        `The user explicitly selected --${continuationOverride} for this force command. The continuation value is fixed and must not be changed by the agent. Call ${DECISION_TOOL_NAME} with continuation set to ${continuationOverride}.`,
-      ]
+          `The user explicitly selected --${continuationOverride} for this force command. The continuation value is fixed and must not be changed by the agent. Call ${DECISION_TOOL_NAME} with continuation set to ${continuationOverride}.`,
+        ]
       : []),
     "This is a decision-only turn. Do not write prose, call any other tool, or perform any other work.",
     `Call ${DECISION_TOOL_NAME} exactly once with continuation set to ${continuationOverride ?? "continue or stop"}.`,
@@ -613,40 +613,40 @@ export function buildSummaryPrompt(
 ): string {
   const emphasis = preparation
     ? [
-      preparation.authorization
-        ? `${noConfirmAuthorizationSubject(preparation.authorization)} authorized the following preparation outcome immediately before this summary request:`
-        : "The user confirmed the following preparation outcome immediately before this summary request:",
-      "<authorized-preparation>",
-      `Authorization: ${preparation.authorization ? noConfirmAuthorizationLabel(preparation.authorization) : "final user confirmation"}`,
-      `Expected continuation: ${preparation.expectedContinuation}`,
-      `Exact next action: ${preparation.nextAction}`,
-      ...(preparation.runExtraContext
-        ? [
-          `Original /supercompact run context: ${preparation.runExtraContext}`,
-        ]
-        : []),
-      ...(preparation.agentExtraContext
-        ? [
-          `${preparation.authorization ? `Agent-supplied summary emphasis authorized under ${noConfirmAuthorizationLabel(preparation.authorization)}` : "Agent-supplied summary emphasis confirmed by the user"}: ${preparation.agentExtraContext}`,
-        ]
-        : []),
-      "</authorized-preparation>",
-      preparation.expectedContinuation === "stop"
-        ? `${preparation.authorization ? "The authorized stop" : "The user-confirmed stop"} is a hard constraint. Preserve the recorded continuation decision as stop.`
-        : `Preserve the ${preparation.authorization ? "authorized" : "confirmed"} intent and exact next action in the canonical handoff.`,
-      ...(continuation
-        ? [`Recorded continuation decision: ${continuation}.`]
-        : []),
-    ].join("\n")
+        preparation.authorization
+          ? `${noConfirmAuthorizationSubject(preparation.authorization)} authorized the following preparation outcome immediately before this summary request:`
+          : "The user confirmed the following preparation outcome immediately before this summary request:",
+        "<authorized-preparation>",
+        `Authorization: ${preparation.authorization ? noConfirmAuthorizationLabel(preparation.authorization) : "final user confirmation"}`,
+        `Expected continuation: ${preparation.expectedContinuation}`,
+        `Exact next action: ${preparation.nextAction}`,
+        ...(preparation.runExtraContext
+          ? [
+              `Original /supercompact run context: ${preparation.runExtraContext}`,
+            ]
+          : []),
+        ...(preparation.agentExtraContext
+          ? [
+              `${preparation.authorization ? `Agent-supplied summary emphasis authorized under ${noConfirmAuthorizationLabel(preparation.authorization)}` : "Agent-supplied summary emphasis confirmed by the user"}: ${preparation.agentExtraContext}`,
+            ]
+          : []),
+        "</authorized-preparation>",
+        preparation.expectedContinuation === "stop"
+          ? `${preparation.authorization ? "The authorized stop" : "The user-confirmed stop"} is a hard constraint. Preserve the recorded continuation decision as stop.`
+          : `Preserve the ${preparation.authorization ? "authorized" : "confirmed"} intent and exact next action in the canonical handoff.`,
+        ...(continuation
+          ? [`Recorded continuation decision: ${continuation}.`]
+          : []),
+      ].join("\n")
     : automaticForce
       ? `Automatic supercompact reached its force threshold. No user supplied extra context or confirmed a preparation outcome. Preserve the active objective, constraints, progress, and one exact next action through compaction. The recorded continuation decision is ${continuation ?? "already established"}; do not change it. Do not invent, broaden, or continue optional work merely to avoid stopping.`
       : extraContext.trim()
         ? [
-          "The user supplied the following extra context. Give it high priority when shaping the summary within the recorded continuation decision and established scope:",
-          "<extra-context>",
-          extraContext.trim(),
-          "</extra-context>",
-        ].join("\n")
+            "The user supplied the following extra context. Give it high priority when shaping the summary within the recorded continuation decision and established scope:",
+            "<extra-context>",
+            extraContext.trim(),
+            "</extra-context>",
+          ].join("\n")
         : "The user supplied no extra context.";
 
   return [
@@ -690,36 +690,36 @@ export function buildContinuationMessage(parsed: ParsedSuperSummary): string {
       : "Do not automatically continue prior work. Preserve this summary as context and wait for the user's next instruction.";
   const preparation = parsed.preparation
     ? [
-      parsed.preparation.authorization
-        ? "## Authorized preparation outcome"
-        : "## Confirmed preparation outcome",
-      "",
-      parsed.preparation.authorization
-        ? `- Authorization: ${noConfirmAuthorizationLabel(parsed.preparation.authorization)}`
-        : `- User-confirmed expectation: ${parsed.preparation.expectedContinuation}`,
-      ...(parsed.preparation.authorization
-        ? [
-          `- Authorized expectation: ${parsed.preparation.expectedContinuation}`,
-        ]
-        : []),
-      `- Validated continuation: ${parsed.action}`,
-      `- Proposed next action: ${parsed.preparation.nextAction}`,
-      ...(parsed.preparation.runExtraContext
-        ? [`- Preparation context: ${parsed.preparation.runExtraContext}`]
-        : []),
-      ...(parsed.preparation.agentExtraContext
-        ? [
-          `- Additional summary context: ${parsed.preparation.agentExtraContext}`,
-        ]
-        : []),
-      ...(parsed.preparation.expectedContinuation === "continue" &&
+        parsed.preparation.authorization
+          ? "## Authorized preparation outcome"
+          : "## Confirmed preparation outcome",
+        "",
+        parsed.preparation.authorization
+          ? `- Authorization: ${noConfirmAuthorizationLabel(parsed.preparation.authorization)}`
+          : `- User-confirmed expectation: ${parsed.preparation.expectedContinuation}`,
+        ...(parsed.preparation.authorization
+          ? [
+              `- Authorized expectation: ${parsed.preparation.expectedContinuation}`,
+            ]
+          : []),
+        `- Validated continuation: ${parsed.action}`,
+        `- Proposed next action: ${parsed.preparation.nextAction}`,
+        ...(parsed.preparation.runExtraContext
+          ? [`- Preparation context: ${parsed.preparation.runExtraContext}`]
+          : []),
+        ...(parsed.preparation.agentExtraContext
+          ? [
+              `- Additional summary context: ${parsed.preparation.agentExtraContext}`,
+            ]
+          : []),
+        ...(parsed.preparation.expectedContinuation === "continue" &&
         parsed.action === "stop"
-        ? [
-          "- Safety outcome: continuation was conservatively downgraded to stop; wait for user direction rather than executing the proposed next action.",
-        ]
-        : []),
-      "",
-    ]
+          ? [
+              "- Safety outcome: continuation was conservatively downgraded to stop; wait for user direction rather than executing the proposed next action.",
+            ]
+          : []),
+        "",
+      ]
     : [];
 
   return [
@@ -821,13 +821,13 @@ export function buildConfirmationText(
     `Next action: ${previewConfirmationValue(preparation.nextAction)}`,
     ...(preparation.runExtraContext
       ? [
-        `Preparation context: ${normalizeConfirmationValue(preparation.runExtraContext)}`,
-      ]
+          `Preparation context: ${normalizeConfirmationValue(preparation.runExtraContext)}`,
+        ]
       : []),
     ...(preparation.agentExtraContext
       ? [
-        `Additional summary context: ${previewConfirmationValue(preparation.agentExtraContext)}`,
-      ]
+          `Additional summary context: ${previewConfirmationValue(preparation.agentExtraContext)}`,
+        ]
       : []),
     "Confirming will begin the canonical super-summary and native compaction immediately.",
   ].join("\n\n");
@@ -1027,9 +1027,9 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
     );
     const projectResult = projectTrusted
       ? readAgentRequestConfig(
-        projectSettings,
-        "trusted project settings.pi-supercompact",
-      )
+          projectSettings,
+          "trusted project settings.pi-supercompact",
+        )
       : { kind: "absent" as const };
 
     for (const [scope, result] of [
@@ -1181,19 +1181,19 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       const message =
         isRecord(result) && Array.isArray(result.content)
           ? result.content
-            .filter(
-              (part): part is { type: "text"; text: string } =>
-                isRecord(part) &&
-                part.type === "text" &&
-                typeof part.text === "string",
-            )
-            .map((part) => part.text)
-            .join(" ")
-            .trim()
+              .filter(
+                (part): part is { type: "text"; text: string } =>
+                  isRecord(part) &&
+                  part.type === "text" &&
+                  typeof part.text === "string",
+              )
+              .map((part) => part.text)
+              .join(" ")
+              .trim()
           : "";
       return staticComponent([
         message ||
-        "Continuation metadata was invalid; correct it as instructed.",
+          "Continuation metadata was invalid; correct it as instructed.",
       ]);
     },
   });
@@ -1268,26 +1268,26 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       pi.sendMessage(
         prepared
           ? {
-            customType: SUMMARY_REQUEST_TYPE,
-            content: buildSummaryPrompt(
-              extraContext,
-              preparation,
-              automaticForce,
-              preparation.expectedContinuation,
-            ),
-            display: false,
-            details: { version: 4, requestId: id },
-          }
+              customType: SUMMARY_REQUEST_TYPE,
+              content: buildSummaryPrompt(
+                extraContext,
+                preparation,
+                automaticForce,
+                preparation.expectedContinuation,
+              ),
+              display: false,
+              details: { version: 4, requestId: id },
+            }
           : {
-            customType: DECISION_REQUEST_TYPE,
-            content: buildDecisionPrompt(
-              preparation,
-              automaticForce,
-              continuationOverride,
-            ),
-            display: false,
-            details: { version: 4, requestId: id },
-          },
+              customType: DECISION_REQUEST_TYPE,
+              content: buildDecisionPrompt(
+                preparation,
+                automaticForce,
+                continuationOverride,
+              ),
+              display: false,
+              details: { version: 4, requestId: id },
+            },
         idle
           ? { triggerTurn: true, deliverAs: "steer" }
           : { deliverAs: "steer" },
@@ -1451,8 +1451,8 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
 
     const grant =
       preparationGrant &&
-        !preparationGrant.consumed &&
-        !preparationGrant.revoked
+      !preparationGrant.consumed &&
+      !preparationGrant.revoked
         ? preparationGrant
         : undefined;
 
@@ -1556,7 +1556,7 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
           currentAuthorization.grantId !== grantId ||
           currentAuthorization.oneShotGrantId !== oneShotGrantId ||
           currentAuthorization.noConfirmAuthorization !==
-          authorization.noConfirmAuthorization
+            authorization.noConfirmAuthorization
         ) {
           throw new Error(
             "Supercompaction authorization expired before execution began. Do not retry automatically; wait for the user to reauthorize with /supercompact run, /supercompact agent-driven-allow, or /supercompact agent-driven-allow-once.",
@@ -1848,12 +1848,12 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
   pi.on("context", (event) => {
     const activeDecisionRequestId =
       request?.phase === "queued-decision" ||
-        request?.phase === "awaiting-decision"
+      request?.phase === "awaiting-decision"
         ? request.id
         : undefined;
     const activeSummaryRequestId =
       request?.phase === "queued-summary" ||
-        request?.phase === "awaiting-summary"
+      request?.phase === "awaiting-summary"
         ? request.id
         : undefined;
     const activePreparationId =
@@ -2602,10 +2602,10 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
         return flags.length === 0
           ? null
           : flags.map((flag) => ({
-            value: `${flagMatch[1]} ${flag}`,
-            label: flag,
-            description: descriptions[flag],
-          }));
+              value: `${flagMatch[1]} ${flag}`,
+              label: flag,
+              description: descriptions[flag],
+            }));
       }
 
       const commands = [
@@ -2651,10 +2651,10 @@ export default function supercompactExtension(pi: ExtensionAPI): void {
       return matches.length === 0
         ? null
         : matches.map(({ value, label, description }) => ({
-          value,
-          label: label ?? value,
-          description,
-        }));
+            value,
+            label: label ?? value,
+            description,
+          }));
     },
     handler: async (args, ctx) => {
       const trimmed = args.trim();
