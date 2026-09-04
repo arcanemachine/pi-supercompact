@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.3 - 2026-09-03
+
+- Clarify that files read before compaction may no longer be in model context and should be re-read when their exact contents matter.
+
 ## 0.5.2 - 2026-09-04
 
 - Clarify the `/supercompact` command, permission, and abort descriptions shown in the TUI.
