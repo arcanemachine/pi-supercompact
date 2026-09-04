@@ -1,6 +1,6 @@
 {
   "name": "@arcanemachine/pi-supercompact",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Power-user supercompaction workflow for Pi",
   "type": "module",
   "keywords": [

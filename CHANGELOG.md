@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-09-04
+
+- Clarify the `/supercompact` command, permission, and abort descriptions shown in the TUI.
+
 ## 0.5.1 - 2026-09-03
 
 - Consolidate persistent configuration into the `pi-supercompact` namespace in
