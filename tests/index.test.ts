@@ -3018,6 +3018,12 @@ describe("summary helper contracts", () => {
     expect(preparation).toContain("one exact immediate next action");
     expect(summary).toContain("Relevant resources by work horizon");
     expect(summary).toContain("include exact file paths when files materially");
+    expect(continuation).toContain(
+      "files read before compaction may no longer be in context",
+    );
+    expect(continuation).toContain(
+      "Re-read any file whose exact contents matter for the next action",
+    );
     expect(descriptions).toContain("Availability is not authorization");
     expect(descriptions).toContain("call only when requested");
   });

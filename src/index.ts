@@ -732,7 +732,7 @@ export function buildContinuationMessage(parsed: ParsedSuperSummary): string {
     ...preparation,
     "## File-reference guidance",
     "",
-    "Resources in the summary are organized by when they are expected to matter. Treat them as focused references, not as proof of current state or instructions to inspect every resource. Read exact contents only when the active task requires them.",
+    "Resources in the summary are organized by when they are expected to matter. Treat them as focused references, not as proof of current state or instructions to inspect every resource. Read exact contents only when the active task requires them. Native compaction has removed the prior conversation from context; files read before compaction may no longer be in context. Re-read any file whose exact contents matter for the next action.",
     "",
     parsed.summary,
   ].join("\n");
