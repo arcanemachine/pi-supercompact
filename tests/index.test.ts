@@ -447,7 +447,7 @@ describe("commands and menu", () => {
       expect.anything(),
     );
     expect(harness.command().description).toBe(
-      "Prepare, force, abort, or manage automatic and agent-driven controls",
+      "Prepare, force, abort, or manage supercompaction",
     );
     harness.ctx.ui.select.mockResolvedValue(undefined);
 
@@ -647,19 +647,19 @@ describe("commands and menu", () => {
         [
           "agent-driven-allow",
           "agent-driven-allow",
-          "Allow agent requests without confirmation",
+          "Allow autonomous agent-driven supercompaction",
         ],
         [
           "agent-driven-allow-once",
           "agent-driven-allow-once",
-          "Allow one agent request without confirmation",
+          "Allow a single autonomous agent-driven supercompaction",
         ],
         [
           "agent-driven-deny",
           "agent-driven-deny",
-          "Deny agent requests and cancel pending permission",
+          "Deny agent requests and cancel pending supercompaction",
         ],
-        ["abort", "abort", "Cancel pre-native supercompaction"],
+        ["abort", "abort", "Cancel supercompaction"],
       ].map(([value, label, description]) => ({
         value,
         label,
