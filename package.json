@@ -50,7 +50,8 @@
     "src",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE.md"
+    "LICENSE.md",
+    "logo.jpg"
   ],
   "repository": {
     "type": "git",
